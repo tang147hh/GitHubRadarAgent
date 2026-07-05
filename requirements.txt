@@ -1,0 +1,9 @@
+hello-agents
+python-dotenv
+pydantic
+requests
+rich
+typer
+schedule
+fastapi
+uvicorn
