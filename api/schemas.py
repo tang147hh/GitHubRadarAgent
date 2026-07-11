@@ -133,6 +133,118 @@ class PackageArticlesRequest(BaseModel):
         return cleaned
 
 
+class NewsCollectRequest(BaseModel):
+    hours: int = Field(default=24, ge=1, le=336)
+    limit: int = Field(default=100, ge=1, le=500)
+    sources: List[str] = Field(default_factory=list, max_items=10)
+    keywords: List[str] = Field(default_factory=list, max_items=30)
+    include_fulltext: bool = False
+    translate: bool = True
+    translate_limit: int = Field(default=50, ge=0, le=500)
+
+    @validator("sources")
+    def validate_sources(cls, value: List[str]) -> List[str]:
+        allowed = {"official", "official_rss", "rss", "hn", "hackernews", "hacker_news", "arxiv", "gdelt", "rsshub"}
+        cleaned: List[str] = []
+        seen: Set[str] = set()
+        for item in value:
+            source = str(item or "").strip().lower()
+            if not source:
+                continue
+            if source not in allowed:
+                raise ValueError(f"Unsupported news source: {source}")
+            if source not in seen:
+                seen.add(source)
+                cleaned.append(source)
+        return cleaned
+
+    @validator("keywords")
+    def validate_news_keywords(cls, value: List[str]) -> List[str]:
+        return normalize_keywords(value, allow_empty=True) or []
+
+
+class NewsScoreRequest(BaseModel):
+    top: int = Field(default=20, ge=1, le=100)
+    min_score: float = Field(default=60, ge=0, le=100)
+
+
+class NewsEventBuildRequest(BaseModel):
+    top: int = Field(default=20, ge=1, le=100)
+    min_score: float = Field(default=60, ge=0, le=100)
+    similarity_threshold: float = Field(default=0.55, ge=0.35, le=0.9)
+
+
+class NewsDigestWriteRequest(BaseModel):
+    top: int = Field(default=12, ge=1, le=50)
+    date: Optional[str] = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+class NewsDigestReviewRequest(BaseModel):
+    threshold: float = Field(default=80, ge=0, le=100)
+    polish: bool = True
+
+
+class NewsSelectionRequest(BaseModel):
+    news_ids: List[str] = Field(default_factory=list, min_items=1, max_items=5)
+    primary_news_id: Optional[str] = None
+    direction_text: Optional[str] = Field(default=None, max_length=20_000)
+
+    @validator("news_ids")
+    def validate_news_ids(cls, value: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        seen: Set[str] = set()
+        for item in value:
+            news_id = str(item or "").strip()
+            if not news_id:
+                continue
+            if "/" in news_id or "\\" in news_id or ".." in news_id:
+                raise ValueError("news_ids must contain safe news ids only.")
+            if len(news_id) > 128:
+                raise ValueError("Each news_id must be at most 128 characters.")
+            if news_id in seen:
+                continue
+            seen.add(news_id)
+            cleaned.append(news_id)
+        if not cleaned:
+            raise ValueError("At least one news item is required.")
+        if len(cleaned) > 5:
+            raise ValueError("At most 5 news items can be selected.")
+        return cleaned
+
+    @validator("primary_news_id")
+    def validate_primary_news_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        news_id = value.strip()
+        if not news_id:
+            return None
+        if "/" in news_id or "\\" in news_id or ".." in news_id or len(news_id) > 128:
+            raise ValueError("primary_news_id must be a safe news id.")
+        return news_id
+
+    @validator("direction_text")
+    def validate_direction_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return value.strip() or None
+
+
+class NewsArticlePlanRequest(BaseModel):
+    selection_id: Optional[str] = None
+    use_latest: bool = True
+
+    @validator("selection_id")
+    def validate_selection_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        selection_id = value.strip()
+        if not selection_id:
+            return None
+        if "/" in selection_id or "\\" in selection_id or ".." in selection_id or len(selection_id) > 160:
+            raise ValueError("selection_id must be a safe id.")
+        return selection_id
+
+
 class UiRunDefaults(BaseModel):
     limit_per_keyword: int = Field(default=3, ge=1, le=50)
     score_top: int = Field(default=30, ge=1, le=100)

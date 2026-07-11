@@ -29,6 +29,235 @@ class RepoCandidate(BaseModel):
     discovery_reason: Optional[str] = None
 
 
+class NewsItem(BaseModel):
+    id: str
+    title: str
+    title_zh: Optional[str] = None
+    url: str
+    source: str
+    source_type: str
+    published_at: Optional[str] = None
+    fetched_at: str
+    summary: str = ""
+    summary_zh: Optional[str] = None
+    content_text: Optional[str] = None
+    content_availability: str = "metadata_only"
+    language: Optional[str] = None
+    topics: List[str] = Field(default_factory=list)
+    keywords: List[str] = Field(default_factory=list)
+    freshness: str = "unknown"
+    raw_score: float = 0.0
+    duplicate_key: str = ""
+    translation_status: str = "skipped"
+    translation_error: Optional[str] = None
+
+
+class NewsDetailResult(BaseModel):
+    news_id: str = ""
+    title: str = ""
+    title_zh: Optional[str] = None
+    summary: str = ""
+    summary_zh: Optional[str] = None
+    url: str = ""
+    source: str = ""
+    source_type: str = ""
+    published_at: Optional[str] = None
+    fetched_at: str = ""
+    freshness: str = "unknown"
+    content_text: Optional[str] = None
+    content_preview: str = ""
+    content_availability: str = "metadata_only"
+    extraction_status: str = "skipped"
+    extraction_error: Optional[str] = None
+    word_count: int = 0
+    original_language: Optional[str] = None
+
+
+class NewsSelectionItem(BaseModel):
+    news_id: str = ""
+    title: str = ""
+    title_zh: Optional[str] = None
+    url: str = ""
+    source: str = ""
+    source_type: str = ""
+    published_at: Optional[str] = None
+    content_availability: str = "metadata_only"
+    role: str = "supporting"
+
+
+class NewsSelectionContext(BaseModel):
+    selection_id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    primary_news_id: str = ""
+    items: List[NewsSelectionItem] = Field(default_factory=list)
+    direction_text: Optional[str] = None
+    notes: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
+class NewsArticlePlan(BaseModel):
+    plan_id: str = ""
+    selection_id: str = ""
+    generated_at: str = ""
+    primary_news_id: str = ""
+    title_candidates: List[str] = Field(default_factory=list)
+    recommended_title: str = ""
+    core_angle: str = ""
+    lead_hook: str = ""
+    event_summary: str = ""
+    key_facts: List[str] = Field(default_factory=list)
+    background_context: List[str] = Field(default_factory=list)
+    why_it_matters: List[str] = Field(default_factory=list)
+    reader_takeaways: List[str] = Field(default_factory=list)
+    developer_impact: List[str] = Field(default_factory=list)
+    industry_impact: List[str] = Field(default_factory=list)
+    article_structure: List[str] = Field(default_factory=list)
+    must_include: List[str] = Field(default_factory=list)
+    should_avoid: List[str] = Field(default_factory=list)
+    source_urls: List[str] = Field(default_factory=list)
+    factual_boundaries: List[str] = Field(default_factory=list)
+    writing_style: str = ""
+    warnings: List[str] = Field(default_factory=list)
+    generation_mode: str = "fallback"
+
+
+class NewsCollectionResult(BaseModel):
+    generated_at: str
+    window_hours: int
+    total_count: int = 0
+    fresh_count: int = 0
+    sources: List[str] = Field(default_factory=list)
+    source_counts: dict[str, int] = Field(default_factory=dict)
+    availability_counts: dict[str, int] = Field(default_factory=dict)
+    items: List[NewsItem] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
+class NewsScore(BaseModel):
+    news_id: str
+    title: str
+    title_zh: Optional[str] = None
+    url: str
+    source: str
+    source_type: str
+    category: str
+    importance_score: float = 0.0
+    freshness_score: float = 0.0
+    source_score: float = 0.0
+    relevance_score: float = 0.0
+    discussion_score: float = 0.0
+    writing_value_score: float = 0.0
+    total_score: float = 0.0
+    recommended: bool = False
+    recommended_section: str = "暂不推荐"
+    reasons: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    keywords: List[str] = Field(default_factory=list)
+
+
+class NewsScoringResult(BaseModel):
+    generated_at: str
+    total_count: int = 0
+    recommended_count: int = 0
+    category_counts: dict[str, int] = Field(default_factory=dict)
+    section_counts: dict[str, int] = Field(default_factory=dict)
+    scores: List[NewsScore] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
+class NewsEventCard(BaseModel):
+    event_id: str = ""
+    event_title: str = ""
+    event_title_zh: str = ""
+    event_summary: str = ""
+    event_summary_zh: str = ""
+    category: str = "noise"
+    recommended_section: str = "暂不推荐"
+    total_score: float = 0.0
+    importance_score: float = 0.0
+    freshness_score: float = 0.0
+    source_count: int = 0
+    sources: List[str] = Field(default_factory=list)
+    source_types: List[str] = Field(default_factory=list)
+    urls: List[str] = Field(default_factory=list)
+    primary_url: str = ""
+    primary_source: str = ""
+    published_at: Optional[str] = None
+    latest_published_at: Optional[str] = None
+    freshness: str = "unknown"
+    keywords: List[str] = Field(default_factory=list)
+    related_news_ids: List[str] = Field(default_factory=list)
+    related_titles: List[str] = Field(default_factory=list)
+    reasons: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    content_availability: str = "metadata_only"
+
+
+class NewsEventResult(BaseModel):
+    generated_at: str = ""
+    total_news_count: int = 0
+    event_count: int = 0
+    recommended_event_count: int = 0
+    section_counts: dict[str, int] = Field(default_factory=dict)
+    category_counts: dict[str, int] = Field(default_factory=dict)
+    events: List[NewsEventCard] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
+class NewsDigestSection(BaseModel):
+    section_name: str = ""
+    event_ids: List[str] = Field(default_factory=list)
+    summary: str = ""
+
+
+class NewsDigestQualityIssue(BaseModel):
+    issue_type: str = ""
+    severity: str = "low"
+    description: str = ""
+    suggestion: str = ""
+    evidence: Optional[str] = None
+
+
+class NewsDigestQualityReport(BaseModel):
+    title: str = ""
+    total_score: float = 0.0
+    publish_ready: bool = False
+    freshness_score: float = 0.0
+    source_integrity_score: float = 0.0
+    section_balance_score: float = 0.0
+    insight_score: float = 0.0
+    readability_score: float = 0.0
+    originality_score: float = 0.0
+    human_tone_score: float = 0.0
+    link_integrity_score: float = 0.0
+    issues: List[NewsDigestQualityIssue] = Field(default_factory=list)
+    strengths: List[str] = Field(default_factory=list)
+    rewrite_recommendations: List[str] = Field(default_factory=list)
+    summary: str = ""
+
+
+class NewsDigestArticle(BaseModel):
+    title: str = ""
+    subtitle: str = ""
+    date: str = ""
+    content_markdown: str = ""
+    event_count: int = 0
+    sections: List[str] = Field(default_factory=list)
+    section_details: List[NewsDigestSection] = Field(default_factory=list)
+    source_event_ids: List[str] = Field(default_factory=list)
+    source_urls: List[str] = Field(default_factory=list)
+    generation_mode: str = "fallback"
+    warnings: List[str] = Field(default_factory=list)
+    word_count: int = 0
+    quality_notes: List[str] = Field(default_factory=list)
+    quality_report: Optional[NewsDigestQualityReport] = None
+    quality_score: float = 0.0
+    publish_ready: bool = False
+    polished: bool = False
+    package_path: Optional[str] = None
+
+
 class AuthorProfile(BaseModel):
     login: str
     type: Optional[str] = None

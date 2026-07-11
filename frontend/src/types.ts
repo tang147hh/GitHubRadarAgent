@@ -265,6 +265,293 @@ export type SettingsResponse = {
   exists: boolean;
 };
 
+export type NewsItem = {
+  id: string;
+  title: string;
+  title_zh?: string | null;
+  url: string;
+  source: string;
+  source_type: string;
+  published_at?: string | null;
+  fetched_at: string;
+  summary: string;
+  summary_zh?: string | null;
+  content_text?: string | null;
+  content_text_truncated?: boolean;
+  content_availability: string;
+  language?: string | null;
+  topics: string[];
+  keywords: string[];
+  freshness: string;
+  raw_score: number;
+  duplicate_key: string;
+  translation_status?: "translated" | "skipped" | "failed" | "source_is_chinese" | string;
+  translation_error?: string | null;
+};
+
+export type NewsCollectionResult = {
+  exists?: boolean;
+  generated_at: string;
+  window_hours: number;
+  total_count: number;
+  fresh_count: number;
+  sources: string[];
+  source_counts: Record<string, number>;
+  availability_counts: Record<string, number>;
+  items: NewsItem[];
+  warnings: string[];
+};
+
+export type NewsDetailResult = {
+  exists?: boolean;
+  news_id: string;
+  title: string;
+  title_zh?: string | null;
+  summary: string;
+  summary_zh?: string | null;
+  url: string;
+  source: string;
+  source_type: string;
+  published_at?: string | null;
+  fetched_at: string;
+  freshness: string;
+  content_text?: string | null;
+  content_text_truncated?: boolean;
+  content_preview: string;
+  content_availability: string;
+  extraction_status: "cached" | "refreshed" | "failed" | "skipped" | string;
+  extraction_error?: string | null;
+  word_count: number;
+  original_language?: string | null;
+};
+
+export type NewsSelectionItem = {
+  news_id: string;
+  title: string;
+  title_zh?: string | null;
+  url: string;
+  source: string;
+  source_type: string;
+  published_at?: string | null;
+  content_availability: string;
+  role: "primary" | "supporting" | string;
+};
+
+export type NewsSelectionContext = {
+  exists?: boolean;
+  selection_id: string;
+  created_at: string;
+  updated_at: string;
+  primary_news_id: string;
+  items: NewsSelectionItem[];
+  direction_text?: string | null;
+  notes: string[];
+  warnings: string[];
+};
+
+export type NewsSelectionRequest = {
+  news_ids: string[];
+  primary_news_id?: string | null;
+  direction_text?: string | null;
+};
+
+export type NewsArticlePlan = {
+  exists?: boolean;
+  plan_id: string;
+  selection_id: string;
+  generated_at: string;
+  primary_news_id: string;
+  title_candidates: string[];
+  recommended_title: string;
+  core_angle: string;
+  lead_hook: string;
+  event_summary: string;
+  key_facts: string[];
+  background_context: string[];
+  why_it_matters: string[];
+  reader_takeaways: string[];
+  developer_impact: string[];
+  industry_impact: string[];
+  article_structure: string[];
+  must_include: string[];
+  should_avoid: string[];
+  source_urls: string[];
+  factual_boundaries: string[];
+  writing_style: string;
+  warnings: string[];
+  generation_mode: "llm" | "fallback" | string;
+};
+
+export type NewsArticlePlanRequest = {
+  selection_id?: string | null;
+  use_latest?: boolean;
+};
+
+export type NewsCollectRequest = {
+  hours: number;
+  limit: number;
+  sources?: string[];
+  keywords?: string[];
+  include_fulltext: boolean;
+  translate?: boolean;
+  translate_limit?: number;
+};
+
+export type NewsScore = {
+  news_id: string;
+  title: string;
+  title_zh?: string | null;
+  url: string;
+  source: string;
+  source_type: string;
+  category: string;
+  importance_score: number;
+  freshness_score: number;
+  source_score: number;
+  relevance_score: number;
+  discussion_score: number;
+  writing_value_score: number;
+  total_score: number;
+  recommended: boolean;
+  recommended_section: string;
+  reasons: string[];
+  warnings: string[];
+  keywords: string[];
+};
+
+export type NewsScoringResult = {
+  exists?: boolean;
+  generated_at: string;
+  total_count: number;
+  recommended_count: number;
+  category_counts: Record<string, number>;
+  section_counts: Record<string, number>;
+  scores: NewsScore[];
+  warnings: string[];
+};
+
+export type NewsScoreRequest = {
+  top: number;
+  min_score: number;
+};
+
+export type NewsEventCard = {
+  event_id: string;
+  event_title: string;
+  event_title_zh: string;
+  event_summary: string;
+  event_summary_zh: string;
+  category: string;
+  recommended_section: string;
+  total_score: number;
+  importance_score: number;
+  freshness_score: number;
+  source_count: number;
+  sources: string[];
+  source_types: string[];
+  urls: string[];
+  primary_url: string;
+  primary_source: string;
+  published_at?: string | null;
+  latest_published_at?: string | null;
+  freshness: string;
+  keywords: string[];
+  related_news_ids: string[];
+  related_titles: string[];
+  reasons: string[];
+  warnings: string[];
+  content_availability: string;
+};
+
+export type NewsEventResult = {
+  exists?: boolean;
+  generated_at: string;
+  total_news_count: number;
+  event_count: number;
+  recommended_event_count: number;
+  section_counts: Record<string, number>;
+  category_counts: Record<string, number>;
+  events: NewsEventCard[];
+  warnings: string[];
+};
+
+export type NewsEventBuildRequest = {
+  top: number;
+  min_score: number;
+  similarity_threshold: number;
+};
+
+export type NewsDigestSection = {
+  section_name: string;
+  event_ids: string[];
+  summary: string;
+};
+
+export type NewsDigestQualityIssue = {
+  issue_type?: string;
+  severity?: "low" | "medium" | "high" | string;
+  description?: string;
+  suggestion?: string;
+  evidence?: string | null;
+};
+
+export type NewsDigestQualityReport = {
+  title?: string;
+  total_score?: number;
+  publish_ready?: boolean;
+  freshness_score?: number;
+  source_integrity_score?: number;
+  section_balance_score?: number;
+  insight_score?: number;
+  readability_score?: number;
+  originality_score?: number;
+  human_tone_score?: number;
+  link_integrity_score?: number;
+  issues?: NewsDigestQualityIssue[];
+  strengths?: string[];
+  rewrite_recommendations?: string[];
+  summary?: string;
+};
+
+export type NewsDigestArticle = {
+  exists?: boolean;
+  title: string;
+  subtitle: string;
+  date: string;
+  content_markdown: string;
+  event_count: number;
+  sections: string[];
+  section_details?: NewsDigestSection[];
+  source_event_ids: string[];
+  source_urls: string[];
+  generation_mode: "llm" | "fallback" | string;
+  warnings: string[];
+  word_count: number;
+  quality_notes: string[];
+  quality_report?: NewsDigestQualityReport | null;
+  quality_score?: number;
+  publish_ready?: boolean;
+  polished?: boolean;
+  package_path?: string | null;
+};
+
+export type NewsDigestWriteRequest = {
+  top: number;
+  date?: string | null;
+};
+
+export type NewsDigestReviewRequest = {
+  threshold?: number;
+  polish?: boolean;
+};
+
+export type NewsReportContent = {
+  exists?: boolean;
+  content_markdown?: string;
+  path?: string | null;
+  message?: string;
+};
+
 export type RunDailyResponse = {
   run_id?: string;
   status?: string;
@@ -453,7 +740,12 @@ export type SnapshotName =
   | "publish_polish"
   | "article_quality"
   | "final_articles"
-  | "article_packages";
+  | "article_packages"
+  | "news"
+  | "news_scores"
+  | "news_events"
+  | "news_digest"
+  | "news_digest_review";
 
 export type VisualAsset = {
   full_name?: string;
@@ -818,6 +1110,7 @@ export type PageKey =
   | "researchNotes"
   | "topicAngles"
   | "articles"
+  | "aiNews"
   | "reports"
   | "reviews"
   | "runsHistory"

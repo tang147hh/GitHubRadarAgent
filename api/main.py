@@ -14,8 +14,29 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import ValidationError
 
 from api.jobs import job_manager
-from api.schemas import CustomArticleRequest, PackageArticlesRequest, RunDailyRequest, UiSettings
+from api.schemas import (
+    CustomArticleRequest,
+    NewsArticlePlanRequest,
+    NewsCollectRequest,
+    NewsDigestWriteRequest,
+    NewsDigestReviewRequest,
+    NewsEventBuildRequest,
+    NewsScoreRequest,
+    NewsSelectionRequest,
+    PackageArticlesRequest,
+    RunDailyRequest,
+    UiSettings,
+)
 from src.config import get_settings
+from src.news_collector import NewsCollectorService, utc_now_iso
+from src.news_article_planner import NewsArticlePlannerService
+from src.news_detail_service import NewsDetailService
+from src.news_digest_polisher import NewsDigestPolisherService
+from src.news_digest_quality import NewsDigestQualityEvaluator
+from src.news_digest_writer import NewsDigestWriterService
+from src.news_event_builder import NewsEventBuilderService
+from src.news_scorer import NewsScoringService
+from src.news_selection_service import NewsSelectionService
 from src.orchestrator import DailyOrchestrator
 
 
@@ -73,6 +94,12 @@ SNAPSHOT_FILES = {
     "article_quality": "workspace/snapshots/article_quality_latest.json",
     "final_articles": "workspace/snapshots/final_articles_latest.json",
     "article_packages": "workspace/snapshots/article_packages_latest.json",
+    "news": "workspace/snapshots/news_latest.json",
+    "news_scores": "workspace/snapshots/news_scores_latest.json",
+    "news_events": "workspace/snapshots/news_events_latest.json",
+    "news_article_plan": "workspace/snapshots/news_article_plan_latest.json",
+    "news_digest": "workspace/snapshots/news_digest_latest.json",
+    "news_digest_review": "workspace/snapshots/news_digest_review_latest.json",
 }
 
 REPORT_FILES = {
@@ -89,6 +116,12 @@ REPORT_FILES = {
     "article_quality_report": "article_quality_report.md",
     "final_articles_index": "final_articles_index.md",
     "article_packages": "article_packages.md",
+    "news_collection_report": "news_collection_report.md",
+    "news_scores_report": "news_scores_report.md",
+    "news_events_report": "news_events_report.md",
+    "news_article_plan": "news_article_plan.md",
+    "ai_news_digest": "ai_news_digest.md",
+    "ai_news_digest_review": "ai_news_digest_review.md",
 }
 
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -354,6 +387,192 @@ def _load_custom_article_latest() -> dict[str, Any]:
     return {"exists": True, "snapshot_path": _relative_path(path), **payload}
 
 
+def _empty_news_result() -> dict[str, Any]:
+    settings = get_settings()
+    return {
+        "exists": False,
+        "generated_at": utc_now_iso(),
+        "window_hours": settings.news_default_hours,
+        "total_count": 0,
+        "fresh_count": 0,
+        "sources": [],
+        "source_counts": {},
+        "availability_counts": {},
+        "items": [],
+        "warnings": ["No news collection result has been generated yet."],
+    }
+
+
+def _empty_news_events_result() -> dict[str, Any]:
+    return {
+        "exists": False,
+        "generated_at": utc_now_iso(),
+        "total_news_count": 0,
+        "event_count": 0,
+        "recommended_event_count": 0,
+        "section_counts": {},
+        "category_counts": {},
+        "events": [],
+        "warnings": ["No news event result has been generated yet."],
+    }
+
+
+def _empty_news_digest_result() -> dict[str, Any]:
+    return {
+        "exists": False,
+        "title": "",
+        "subtitle": "",
+        "date": "",
+        "content_markdown": "",
+        "event_count": 0,
+        "sections": [],
+        "section_details": [],
+        "source_event_ids": [],
+        "source_urls": [],
+        "generation_mode": "fallback",
+        "warnings": ["No AI news digest has been generated yet."],
+        "word_count": 0,
+        "quality_notes": [],
+        "quality_report": None,
+        "quality_score": 0.0,
+        "publish_ready": False,
+        "polished": False,
+        "package_path": None,
+    }
+
+
+def _news_api_payload(payload: dict[str, Any], content_text_limit: int = 2000) -> dict[str, Any]:
+    copied = json.loads(json.dumps(payload))
+    for item in copied.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        content_text = item.get("content_text")
+        if isinstance(content_text, str) and len(content_text) > content_text_limit:
+            item["content_text"] = content_text[:content_text_limit].rstrip()
+            item["content_text_truncated"] = True
+        else:
+            item["content_text_truncated"] = False
+    copied.setdefault("exists", True)
+    return copied
+
+
+def _news_detail_api_payload(payload: dict[str, Any], content_text_limit: int = 10000) -> dict[str, Any]:
+    copied = json.loads(json.dumps(payload))
+    content_text = copied.get("content_text")
+    if isinstance(content_text, str) and len(content_text) > content_text_limit:
+        copied["content_text"] = content_text[:content_text_limit].rstrip()
+        copied["content_text_truncated"] = True
+    else:
+        copied["content_text_truncated"] = False
+    copied.setdefault("exists", True)
+    return copied
+
+
+def _latest_news_report_path() -> Path | None:
+    if not OUTPUTS_DIR.exists():
+        return None
+    candidates = sorted(
+        OUTPUTS_DIR.glob("*/news_collection_report.md"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    outputs_root = OUTPUTS_DIR.resolve()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if outputs_root == resolved or outputs_root in resolved.parents:
+            return resolved
+    return None
+
+
+def _latest_news_scores_report_path() -> Path | None:
+    if not OUTPUTS_DIR.exists():
+        return None
+    candidates = sorted(
+        OUTPUTS_DIR.glob("*/news_scores_report.md"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    outputs_root = OUTPUTS_DIR.resolve()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if outputs_root == resolved or outputs_root in resolved.parents:
+            return resolved
+    return None
+
+
+def _latest_news_events_report_path() -> Path | None:
+    if not OUTPUTS_DIR.exists():
+        return None
+    candidates = sorted(
+        OUTPUTS_DIR.glob("*/news_events_report.md"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    outputs_root = OUTPUTS_DIR.resolve()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if outputs_root == resolved or outputs_root in resolved.parents:
+            return resolved
+    return None
+
+
+def _latest_news_digest_path() -> Path | None:
+    latest_path = safe_project_path("workspace/news/news_digest_latest.json")
+    if latest_path.exists():
+        return latest_path
+    return None
+
+
+def _latest_news_digest_markdown_path() -> Path | None:
+    if not OUTPUTS_DIR.exists():
+        return None
+    candidates = sorted(
+        OUTPUTS_DIR.glob("*/ai_news_digest.md"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    outputs_root = OUTPUTS_DIR.resolve()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if outputs_root == resolved or outputs_root in resolved.parents:
+            return resolved
+    return None
+
+
+def _latest_news_digest_review_path() -> Path | None:
+    latest_path = safe_project_path("workspace/news/news_digest_review_latest.json")
+    if latest_path.exists():
+        return latest_path
+    return None
+
+
+def _latest_news_digest_package_path() -> Path | None:
+    digest_path = _latest_news_digest_path()
+    if digest_path is not None:
+        payload = read_json_file(digest_path)
+        if isinstance(payload, dict) and payload.get("package_path"):
+            try:
+                package_path = _safe_workspace_or_outputs_path(str(payload["package_path"]))
+                if package_path.exists() and package_path.suffix == ".md":
+                    return package_path
+            except HTTPException:
+                pass
+
+    if not OUTPUTS_DIR.exists():
+        return None
+    candidates = sorted(
+        OUTPUTS_DIR.glob("*/news_digest_package/packaged_ai_news_digest.md"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    outputs_root = OUTPUTS_DIR.resolve()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if outputs_root == resolved or outputs_root in resolved.parents:
+            return resolved
+    return None
+
+
 def _custom_article_markdown_response(path_key: str, empty_message: str) -> dict[str, Any]:
     latest = _load_custom_article_latest()
     if not latest.get("exists"):
@@ -450,6 +669,12 @@ def _model_dump(model: Any) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump()
     return model.dict()
+
+
+def _model_copy(model: Any, update: dict[str, Any]) -> Any:
+    if hasattr(model, "model_copy"):
+        return model.model_copy(update=update)
+    return model.copy(update=update)
 
 
 def _package_response(packages: list[Any]) -> dict[str, Any]:
@@ -874,6 +1099,379 @@ def config_status() -> dict[str, Any]:
         "output_dir": "outputs",
         "workspace_dir": "workspace",
         "daily_keywords": settings.daily_keywords,
+    }
+
+
+@app.get("/api/news/latest")
+def latest_news() -> dict[str, Any]:
+    path = safe_project_path("workspace/news/news_latest.json")
+    if not path.exists():
+        return _empty_news_result()
+    payload = read_json_file(path)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Latest news JSON must be an object.")
+    return _news_api_payload(payload)
+
+
+@app.get("/api/news/report")
+def latest_news_report() -> dict[str, Any]:
+    path = _latest_news_report_path()
+    if path is None:
+        raise HTTPException(status_code=404, detail="No news collection report has been generated yet.")
+    return {
+        "exists": True,
+        "content_markdown": read_text_file(path),
+        "path": _relative_path(path),
+    }
+
+
+@app.get("/api/news/items/{news_id}")
+def news_item_detail(news_id: str) -> dict[str, Any]:
+    try:
+        detail = NewsDetailService().get_detail(news_id, refresh=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"News item not found: {news_id}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"News detail failed: {type(exc).__name__}: {exc}")
+    return _news_detail_api_payload(_model_dump(detail))
+
+
+@app.post("/api/news/items/{news_id}/refresh")
+def refresh_news_item_detail(news_id: str) -> dict[str, Any]:
+    try:
+        detail = NewsDetailService().get_detail(news_id, refresh=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"News item not found: {news_id}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"News detail refresh failed: {type(exc).__name__}: {exc}")
+    return _news_detail_api_payload(_model_dump(detail))
+
+
+@app.post("/api/news/selections")
+def create_news_selection(request: NewsSelectionRequest) -> dict[str, Any]:
+    payload = _model_dump(request)
+    try:
+        service = NewsSelectionService()
+        context = service.build_selection(
+            news_ids=payload.get("news_ids") or [],
+            primary_news_id=payload.get("primary_news_id"),
+            direction_text=payload.get("direction_text"),
+        )
+        context = service.save_selection(context)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"News selection failed: {type(exc).__name__}: {exc}")
+    return {"exists": True, **_model_dump(context)}
+
+
+@app.get("/api/news/selections/latest")
+def latest_news_selection() -> dict[str, Any]:
+    try:
+        context = NewsSelectionService().load_latest_selection()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"exists": True, **_model_dump(context)}
+
+
+@app.get("/api/news/selections/{selection_id}")
+def news_selection(selection_id: str) -> dict[str, Any]:
+    try:
+        context = NewsSelectionService().load_selection(selection_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"News selection not found: {selection_id}")
+    return {"exists": True, **_model_dump(context)}
+
+
+@app.post("/api/news/article-plan")
+def create_news_article_plan(request: NewsArticlePlanRequest) -> dict[str, Any]:
+    payload = _model_dump(request)
+    try:
+        os.chdir(PROJECT_ROOT)
+        service = NewsArticlePlannerService()
+        selection_id = payload.get("selection_id")
+        if selection_id:
+            plan = service.plan_by_selection_id(selection_id)
+        elif payload.get("use_latest", True):
+            plan = service.plan_latest()
+        else:
+            raise ValueError("selection_id is required when use_latest is false.")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"News article planning failed: {type(exc).__name__}: {exc}")
+    return {"exists": True, **_model_dump(plan)}
+
+
+@app.get("/api/news/article-plan/latest")
+def latest_news_article_plan() -> dict[str, Any]:
+    try:
+        plan = NewsArticlePlannerService().load_latest_plan()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"exists": True, **_model_dump(plan)}
+
+
+@app.get("/api/news/article-plan/{plan_id}")
+def news_article_plan(plan_id: str) -> dict[str, Any]:
+    try:
+        plan = NewsArticlePlannerService().load_plan(plan_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"News article plan not found: {plan_id}")
+    return {"exists": True, **_model_dump(plan)}
+
+
+@app.get("/api/news/scores")
+def latest_news_scores() -> dict[str, Any]:
+    path = safe_project_path("workspace/news/news_scores_latest.json")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="No news score result has been generated yet. Run score-news first.")
+    payload = read_json_file(path)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Latest news scores JSON must be an object.")
+    return {"exists": True, **payload}
+
+
+@app.get("/api/news/scores/report")
+def latest_news_scores_report() -> dict[str, Any]:
+    path = _latest_news_scores_report_path()
+    if path is None:
+        raise HTTPException(status_code=404, detail="No news score report has been generated yet.")
+    return {
+        "exists": True,
+        "content_markdown": read_text_file(path),
+        "path": _relative_path(path),
+    }
+
+
+@app.get("/api/news/events")
+def latest_news_events() -> dict[str, Any]:
+    path = safe_project_path("workspace/news/news_events_latest.json")
+    if not path.exists():
+        return _empty_news_events_result()
+    payload = read_json_file(path)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Latest news events JSON must be an object.")
+    return {"exists": True, **payload}
+
+
+@app.get("/api/news/events/report")
+def latest_news_events_report() -> dict[str, Any]:
+    path = _latest_news_events_report_path()
+    if path is None:
+        raise HTTPException(status_code=404, detail="No news event report has been generated yet.")
+    return {
+        "exists": True,
+        "content_markdown": read_text_file(path),
+        "path": _relative_path(path),
+    }
+
+
+@app.get("/api/news/digest")
+def latest_news_digest() -> dict[str, Any]:
+    path = _latest_news_digest_path()
+    if path is None:
+        return _empty_news_digest_result()
+    payload = read_json_file(path)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Latest AI news digest JSON must be an object.")
+    return {"exists": True, **payload}
+
+
+@app.get("/api/news/digest/content")
+def latest_news_digest_content() -> dict[str, Any]:
+    digest_path = _latest_news_digest_path()
+    if digest_path is not None:
+        payload = read_json_file(digest_path)
+        if isinstance(payload, dict) and payload.get("content_markdown"):
+            markdown_path = _latest_news_digest_markdown_path()
+            return {
+                "exists": True,
+                "content_markdown": str(payload.get("content_markdown") or ""),
+                "path": _relative_path(markdown_path) if markdown_path else _relative_path(digest_path),
+            }
+
+    markdown_path = _latest_news_digest_markdown_path()
+    if markdown_path is None:
+        return {
+            "exists": False,
+            "content_markdown": "",
+            "path": None,
+            "message": "No AI news digest has been generated yet.",
+        }
+    return {
+        "exists": True,
+        "content_markdown": read_text_file(markdown_path),
+        "path": _relative_path(markdown_path),
+    }
+
+
+@app.get("/api/news/digest/review")
+def latest_news_digest_review() -> dict[str, Any]:
+    digest_path = _latest_news_digest_path()
+    if digest_path is None:
+        raise HTTPException(status_code=404, detail="No AI news digest found. Please run write-news-digest first.")
+    path = _latest_news_digest_review_path()
+    if path is None:
+        return {
+            "exists": False,
+            "message": "AI news digest has not been reviewed yet.",
+            "quality_report": None,
+        }
+    payload = read_json_file(path)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Latest AI news digest review JSON must be an object.")
+    return {"exists": True, "quality_report": payload, **payload}
+
+
+@app.get("/api/news/digest/package")
+def latest_news_digest_package() -> dict[str, Any]:
+    digest_path = _latest_news_digest_path()
+    if digest_path is None:
+        raise HTTPException(status_code=404, detail="No AI news digest found. Please run write-news-digest first.")
+    package_path = _latest_news_digest_package_path()
+    if package_path is None:
+        raise HTTPException(status_code=404, detail="No AI news digest package found. Please run review-news-digest first.")
+    return {
+        "exists": True,
+        "content_markdown": read_text_file(package_path),
+        "path": _relative_path(package_path),
+    }
+
+
+@app.post("/api/news/collect")
+def collect_news(request: NewsCollectRequest) -> dict[str, Any]:
+    payload = _model_dump(request)
+    try:
+        os.chdir(PROJECT_ROOT)
+        result = NewsCollectorService().collect(
+            hours=payload["hours"],
+            limit=payload["limit"],
+            sources=payload.get("sources") or None,
+            keywords=payload.get("keywords") or None,
+            include_fulltext=payload.get("include_fulltext", False),
+            translate=payload.get("translate", True),
+            translate_limit=payload.get("translate_limit", 50),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"News collection failed: {type(exc).__name__}: {exc}")
+    return _news_api_payload(_model_dump(result))
+
+
+@app.post("/api/news/score")
+def score_news(request: NewsScoreRequest) -> dict[str, Any]:
+    payload = _model_dump(request)
+    news_path = safe_project_path("workspace/news/news_latest.json")
+    if not news_path.exists():
+        raise HTTPException(status_code=404, detail="No news collection found. Please run collect-news first.")
+    try:
+        os.chdir(PROJECT_ROOT)
+        result = NewsScoringService().score_latest(
+            top=payload.get("top", 20),
+            min_score=payload.get("min_score", 60),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"News scoring failed: {type(exc).__name__}: {exc}")
+    return {"exists": True, **_model_dump(result)}
+
+
+@app.post("/api/news/events/build")
+def build_news_events(request: NewsEventBuildRequest) -> dict[str, Any]:
+    payload = _model_dump(request)
+    news_path = safe_project_path("workspace/news/news_latest.json")
+    scores_path = safe_project_path("workspace/news/news_scores_latest.json")
+    if not news_path.exists():
+        raise HTTPException(status_code=404, detail="No news collection found. Please run collect-news first.")
+    if not scores_path.exists():
+        raise HTTPException(status_code=404, detail="No news scoring result found. Please run score-news first.")
+    try:
+        os.chdir(PROJECT_ROOT)
+        result = NewsEventBuilderService().build_latest(
+            top=payload.get("top", 20),
+            min_score=payload.get("min_score", 60),
+            similarity_threshold=payload.get("similarity_threshold", 0.55),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"News event build failed: {type(exc).__name__}: {exc}")
+    return {"exists": True, **_model_dump(result)}
+
+
+@app.post("/api/news/digest/write")
+def write_news_digest(request: NewsDigestWriteRequest) -> dict[str, Any]:
+    payload = _model_dump(request)
+    events_path = safe_project_path("workspace/news/news_events_latest.json")
+    if not events_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="No news event result found. Please run collect-news, score-news, and build-news-events first.",
+        )
+    try:
+        os.chdir(PROJECT_ROOT)
+        result = NewsDigestWriterService().write_latest(
+            top=payload.get("top", 12),
+            date=payload.get("date"),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"AI news digest writing failed: {type(exc).__name__}: {exc}")
+    return {"exists": True, **_model_dump(result)}
+
+
+@app.post("/api/news/digest/review")
+def review_news_digest(request: NewsDigestReviewRequest) -> dict[str, Any]:
+    payload = _model_dump(request)
+    digest_path = safe_project_path("workspace/news/news_digest_latest.json")
+    if not digest_path.exists():
+        raise HTTPException(status_code=404, detail="No AI news digest found. Please run write-news-digest first.")
+    try:
+        os.chdir(PROJECT_ROOT)
+        evaluator = NewsDigestQualityEvaluator()
+        polisher = NewsDigestPolisherService()
+        article = evaluator.load_latest_digest()
+        events_result = evaluator.load_latest_events()
+        report = evaluator.evaluate(article, events_result, threshold=payload.get("threshold", 80))
+        if payload.get("polish", True):
+            article = polisher.polish_article(article, report)
+            if article.polished:
+                report = evaluator.evaluate(article, events_result, threshold=payload.get("threshold", 80))
+                article = _model_copy(
+                    article,
+                    {
+                        "quality_report": report,
+                        "quality_score": report.total_score,
+                        "publish_ready": report.publish_ready,
+                    },
+                )
+        else:
+            article = polisher.attach_quality(article, report)
+        article = polisher.generate_package(article, report)
+        polisher.save_article(article)
+        evaluator.save_report(article, report)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"AI news digest review failed: {type(exc).__name__}: {exc}")
+    return {
+        "exists": True,
+        **_model_dump(article),
+        "quality_report": _model_dump(report),
     }
 
 

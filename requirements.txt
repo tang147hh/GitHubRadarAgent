@@ -2,6 +2,9 @@ hello-agents
 python-dotenv
 pydantic
 requests
+feedparser
+trafilatura
+lxml_html_clean
 rich
 typer
 schedule

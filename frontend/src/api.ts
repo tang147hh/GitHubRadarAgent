@@ -8,6 +8,21 @@ import type {
   FinalArticleItem,
   JobStatus,
   LatestRunResponse,
+  NewsArticlePlan,
+  NewsArticlePlanRequest,
+  NewsCollectRequest,
+  NewsCollectionResult,
+  NewsDetailResult,
+  NewsDigestArticle,
+  NewsDigestReviewRequest,
+  NewsDigestWriteRequest,
+  NewsEventBuildRequest,
+  NewsEventResult,
+  NewsScoreRequest,
+  NewsScoringResult,
+  NewsReportContent,
+  NewsSelectionContext,
+  NewsSelectionRequest,
   OutputDateDetail,
   OutputDateSummary,
   OutputMarkdownContent,
@@ -103,6 +118,37 @@ export const fetchSettings = () => getJson<SettingsResponse>("/api/settings");
 export const saveSettings = (settings: UiSettings) => putJson<SettingsResponse>("/api/settings", settings);
 export const resetSettings = () => postJson<SettingsResponse>("/api/settings/reset", {});
 export const fetchDashboard = () => getJson<DashboardResponse>("/api/dashboard");
+export const fetchLatestNews = () => getJson<NewsCollectionResult>("/api/news/latest");
+export const fetchNewsReport = () => getJson<NewsReportContent>("/api/news/report");
+export const collectNews = (request: NewsCollectRequest) => postJson<NewsCollectionResult>("/api/news/collect", request);
+export const fetchNewsDetail = (newsId: string) => getJson<NewsDetailResult>(`/api/news/items/${encodeURIComponent(newsId)}`);
+export const refreshNewsDetail = (newsId: string) =>
+  postJson<NewsDetailResult>(`/api/news/items/${encodeURIComponent(newsId)}/refresh`, {});
+export const createNewsSelection = (request: NewsSelectionRequest) =>
+  postJson<NewsSelectionContext>("/api/news/selections", request);
+export const fetchLatestNewsSelection = () => getJson<NewsSelectionContext>("/api/news/selections/latest");
+export const fetchNewsSelection = (selectionId: string) =>
+  getJson<NewsSelectionContext>(`/api/news/selections/${encodeURIComponent(selectionId)}`);
+export const createNewsArticlePlan = (request: NewsArticlePlanRequest) =>
+  postJson<NewsArticlePlan>("/api/news/article-plan", request);
+export const fetchLatestNewsArticlePlan = () => getJson<NewsArticlePlan>("/api/news/article-plan/latest");
+export const fetchNewsArticlePlan = (planId: string) =>
+  getJson<NewsArticlePlan>(`/api/news/article-plan/${encodeURIComponent(planId)}`);
+export const fetchNewsScores = () => getJson<NewsScoringResult>("/api/news/scores");
+export const scoreNews = (request: NewsScoreRequest) => postJson<NewsScoringResult>("/api/news/score", request);
+export const fetchNewsScoresReport = () => getJson<NewsReportContent>("/api/news/scores/report");
+export const fetchNewsEvents = () => getJson<NewsEventResult>("/api/news/events");
+export const fetchNewsEventsReport = () => getJson<NewsReportContent>("/api/news/events/report");
+export const buildNewsEvents = (request: NewsEventBuildRequest) =>
+  postJson<NewsEventResult>("/api/news/events/build", request);
+export const fetchNewsDigest = () => getJson<NewsDigestArticle>("/api/news/digest");
+export const fetchNewsDigestContent = () => getJson<NewsReportContent>("/api/news/digest/content");
+export const writeNewsDigest = (request: NewsDigestWriteRequest) =>
+  postJson<NewsDigestArticle>("/api/news/digest/write", request);
+export const reviewNewsDigest = (request: NewsDigestReviewRequest) =>
+  postJson<NewsDigestArticle>("/api/news/digest/review", request);
+export const fetchNewsDigestReview = () => getJson<NewsDigestArticle>("/api/news/digest/review");
+export const fetchNewsDigestPackage = () => getJson<NewsReportContent>("/api/news/digest/package");
 export const fetchSnapshot = <T = unknown>(name: SnapshotName) =>
   getJson<T>(`/api/snapshots/${encodeURIComponent(name)}`);
 export const fetchFinalArticles = () => getJson<{ articles?: FinalArticleItem[] }>("/api/articles/final");

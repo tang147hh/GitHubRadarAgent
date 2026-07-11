@@ -40,12 +40,38 @@ class Settings(BaseModel):
     github_personal_access_token: Optional[str] = None
     tavily_api_key: Optional[str] = None
     prefer_growth_projects: bool = True
+    rsshub_base_url: Optional[str] = None
+    news_default_hours: int = 24
+    news_keywords: List[str] = Field(
+        default_factory=lambda: [
+            "OpenAI",
+            "Anthropic",
+            "DeepSeek",
+            "LLM",
+            "AI agent",
+            "AI regulation",
+            "NVIDIA AI",
+        ]
+    )
 
 
 def _split_keywords(value: Optional[str]) -> List[str]:
     if not value:
         return Settings().daily_keywords
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _split_news_keywords(value: Optional[str]) -> List[str]:
+    if not value:
+        return Settings().news_keywords
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
 
 
 @lru_cache(maxsize=1)
@@ -63,4 +89,7 @@ def get_settings() -> Settings:
         github_personal_access_token=os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN") or None,
         tavily_api_key=os.getenv("TAVILY_API_KEY") or None,
         prefer_growth_projects=os.getenv("PREFER_GROWTH_PROJECTS", "true").strip().lower() not in {"0", "false", "no"},
+        rsshub_base_url=os.getenv("RSSHUB_BASE_URL") or None,
+        news_default_hours=max(1, _int_env("NEWS_DEFAULT_HOURS", 24)),
+        news_keywords=_split_news_keywords(os.getenv("NEWS_KEYWORDS")),
     )

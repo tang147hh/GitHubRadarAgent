@@ -17,6 +17,7 @@ import { articlePreview, finalArticles, getLocalized, pipelineStages, reviewSumm
 import { copyText, downloadMarkdown } from "./fileUtils";
 import type { Language } from "./i18n";
 import { translations } from "./i18n";
+import { AINewsPage } from "./pages/AINewsPage";
 import { ArticlesPage } from "./pages/ArticlesPage";
 import { CandidatesPage } from "./pages/CandidatesPage";
 import { CustomArticlePage } from "./pages/CustomArticlePage";
@@ -589,6 +590,7 @@ function App() {
     if (activePage === "researchNotes") return <ResearchNotesPage t={t} />;
     if (activePage === "topicAngles") return <TopicAnglesPage t={t} />;
     if (activePage === "articles") return <ArticlesPage t={t} language={language} />;
+    if (activePage === "aiNews") return <AINewsPage t={t} />;
     if (activePage === "reports") {
       return <ReportsPage t={t} initialDate={selectedOutputDate} initialSelection={selectedOutputSelection} />;
     }
