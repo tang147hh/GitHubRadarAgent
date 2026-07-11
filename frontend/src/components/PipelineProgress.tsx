@@ -17,6 +17,7 @@ const stageLabelKey = (name = "") => {
   if (name === "plan-content") return "contentPlan";
   if (name === "write-articles") return "write";
   if (name === "review-articles") return "review";
+  if (name === "package-articles") return "packageArticles";
   return name;
 };
 
@@ -40,25 +41,27 @@ export function PipelineProgress({ t, stages, runInfo, currentStage }: PipelineP
         <span className={`soft-badge ${overallTone}`}>{t.statusLabels[overallTone]}</span>
       </div>
 
-      <div className="pipeline-track">
-        {visibleStages.map((stage, index) => {
-          const tone = statusTone(stage.status);
-          const Icon = tone === "success" ? Check : tone === "failed" ? X : tone === "running" ? LoaderCircle : Circle;
-          const labelKey = stageLabelKey(stage.name);
-          const label = labelKey in t.pipeline ? t.pipeline[labelKey as keyof typeof t.pipeline] : stage.name || t.status.unknown;
-          const isCurrent = Boolean(currentStage && stage.name === currentStage);
+      <div className="pipeline-scroll">
+        <div className="pipeline-track">
+          {visibleStages.map((stage, index) => {
+            const tone = statusTone(stage.status);
+            const Icon = tone === "success" ? Check : tone === "failed" ? X : tone === "running" ? LoaderCircle : Circle;
+            const labelKey = stageLabelKey(stage.name);
+            const label = labelKey in t.pipeline ? t.pipeline[labelKey as keyof typeof t.pipeline] : stage.name || t.status.unknown;
+            const isCurrent = Boolean(currentStage && stage.name === currentStage);
 
-          return (
-          <div className={`pipeline-step ${tone}${isCurrent ? " current" : ""}`} key={`${stage.name}-${index}`}>
-            <div className={`step-node ${tone}`}>
-              <Icon className={tone === "running" ? "spin-icon" : ""} size={16} aria-hidden="true" />
-            </div>
-            {index < visibleStages.length - 1 ? <div className={`step-line ${tone}`} /> : null}
-            <span>{label}</span>
-            <small title={stage.error || stage.message || ""}>{t.statusLabels[tone]}</small>
-          </div>
-          );
-        })}
+            return (
+              <div className={`pipeline-step ${tone}${isCurrent ? " current" : ""}`} key={`${stage.name}-${index}`}>
+                <div className={`step-node ${tone}`}>
+                  <Icon className={tone === "running" ? "spin-icon" : ""} size={16} aria-hidden="true" />
+                </div>
+                {index < visibleStages.length - 1 ? <div className={`step-line ${tone}`} /> : null}
+                <span>{label}</span>
+                <small title={stage.error || stage.message || ""}>{t.statusLabels[tone]}</small>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <div className="run-info-grid">
