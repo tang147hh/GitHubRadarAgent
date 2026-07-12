@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config import get_settings
+from src.interaction_metrics import interaction_metric_hits, unsupported_community_claim_hits
 from src.models import (
     NewsDigestArticle,
     NewsDigestQualityIssue,
@@ -147,6 +148,8 @@ class NewsDigestQualityEvaluator:
         link_integrity_score = self._score_link_integrity(markdown, issues)
         self._check_opening(paragraphs, issues)
         self._check_today_observation(markdown, issues)
+        self._check_interaction_metrics(markdown, issues)
+        self._check_unsupported_community_claims(markdown, issues)
 
         total_score = round(
             freshness_score * 0.15
@@ -531,6 +534,34 @@ class NewsDigestQualityEvaluator:
                     suggestion="补一个短结尾，总结当天新闻的共同方向和下一步观察点。",
                 )
             )
+
+    def _check_interaction_metrics(self, markdown: str, issues: list[NewsDigestQualityIssue]) -> None:
+        hits = interaction_metric_hits(markdown)
+        if not hits:
+            return
+        issues.append(
+            NewsDigestQualityIssue(
+                issue_type="interaction_metric_used",
+                severity="high",
+                description="日报使用了点赞数、评论数、points、comments 或互动热度相关表述。",
+                suggestion="删除互动数量相关表述，改成基于事实、来源和事件影响来写。",
+                evidence="、".join(hits[:6]),
+            )
+        )
+
+    def _check_unsupported_community_claims(self, markdown: str, issues: list[NewsDigestQualityIssue]) -> None:
+        hits = unsupported_community_claim_hits(markdown)
+        if not hits:
+            return
+        issues.append(
+            NewsDigestQualityIssue(
+                issue_type="unsupported_community_claim",
+                severity="high",
+                description="日报概括了社区共识或开发者普遍观点，但事件卡没有具体评论正文支撑。",
+                suggestion="删除社区共识判断；只有抓取到有信息增量的评论正文时，才可作为补充参考。",
+                evidence="、".join(hits[:6]),
+            )
+        )
 
     def _strip_markdown_noise(self, markdown: str) -> str:
         lines = []

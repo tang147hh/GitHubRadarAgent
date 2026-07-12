@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config import get_settings
+from src.interaction_metrics import strip_interaction_metric_text, without_interaction_metric_values
 from src.llm_service import LLMService
 from src.models import NewsDigestArticle, NewsDigestSection, NewsEventCard, NewsEventResult
 from src.news_collector import utc_now_iso
@@ -229,7 +230,9 @@ class NewsDigestWriterService:
             "你是中文 AI 圈日报编辑，写作目标是适合公众号发布的新闻日报。"
             "语气信息密度高、口语适度、克制，不写报告腔，不标题党。"
             "只能依据给定事件卡写作；不要伪造数据、不要扩展没有证据的结论。"
-            "社区讨论必须写成社区讨论或开发者反馈；论文只用提出、探索、展示等稳妥表达；商业和监管不做无依据判断。"
+            "完全忽略点赞数、评论数、points、comments 等互动数量，不得把互动数量作为推荐、排序或写作理由。"
+            "社区来源只能写成开发者社区消息；没有具体评论正文时，不得总结社区观点或开发者共识。"
+            "论文只用提出、探索、展示等稳妥表达；商业和监管不做无依据判断。"
             "不要大段搬运原文摘要，不要使用“根据外媒报道”这类空泛套话。"
         )
         user_prompt = (
@@ -343,13 +346,13 @@ class NewsDigestWriterService:
         title = event.event_title_zh or event.event_title
         summary = _clean_text(event.event_summary_zh or event.event_summary or title, 220)
         if event.category == "community_discussion":
-            return f"社区里正在讨论「{title}」。从事件卡片看，讨论焦点大致是：{summary}"
+            return f"这是一条来自开发者社区的消息，主题是「{title}」。从事件卡片看，可核验信息是：{summary}"
         if event.category == "research_paper":
             return f"这条研究动态围绕「{title}」展开。事件卡片显示，相关工作主要在提出、探索或展示新的方法与结果：{summary}"
         return f"这条消息的核心是「{title}」。从事件卡片看，主要变化可以概括为：{summary}"
 
     def _fallback_attention(self, event: NewsEventCard) -> str:
-        reasons = "；".join((event.reasons or [])[:2])
+        reasons = "；".join(without_interaction_metric_values((event.reasons or [])[:2]))
         source_note = f"目前覆盖 {event.source_count or len(event.sources or []) or 1} 个来源"
         if event.category == "policy_regulation":
             return f"值得关注的是，它可能影响后续产品合规或行业预期，但现在只能以原始来源信息为准。{source_note}。{reasons}"
@@ -358,7 +361,7 @@ class NewsDigestWriterService:
         if event.category == "research_paper":
             return f"值得关注的是，这类研究可能为模型、工具或评测方向提供新线索，但结论仍需要更多验证。{source_note}。{reasons}"
         if event.category == "community_discussion":
-            return f"值得关注的是，开发者反馈往往能提前暴露真实使用场景里的痛点，不过它仍然是社区讨论，不等同于已确认事实。{source_note}。{reasons}"
+            return f"值得关注的是，它提供了一个观察开发者真实场景问题的入口，但不能写成已确认事实或社区共识。{source_note}。{reasons}"
         return f"值得关注的是，它和模型能力、产品体验或开发者工作流有关，后续是否落地还要继续看官方更新和用户反馈。{source_note}。{reasons}"
 
     def _closing_observation(self, grouped: dict[str, list[NewsEventCard]]) -> str:
@@ -379,14 +382,14 @@ class NewsDigestWriterService:
                         "event_id": event.event_id,
                         "title": event.event_title_zh or event.event_title,
                         "original_title": event.event_title,
-                        "summary": _clean_text(event.event_summary_zh or event.event_summary, 500),
+                        "summary": _clean_text(strip_interaction_metric_text(event.event_summary_zh or event.event_summary), 500),
                         "category": event.category,
                         "score": event.total_score,
                         "source_count": event.source_count,
                         "sources": event.sources[:6],
                         "urls": urls[:6],
                         "primary_url": event.primary_url,
-                        "reasons": event.reasons[:5],
+                        "reasons": without_interaction_metric_values(event.reasons[:5]),
                         "warnings": event.warnings[:5],
                         "published_at": event.published_at,
                         "latest_published_at": event.latest_published_at,
@@ -420,7 +423,7 @@ class NewsDigestWriterService:
         cleaned = markdown.strip()
         if not cleaned.startswith("# "):
             cleaned = f"# {self._title_for_date(digest_date)}\n\n{cleaned}"
-        return cleaned.rstrip() + "\n"
+        return strip_interaction_metric_text(cleaned).rstrip() + "\n"
 
     def _quality_notes(self, article: NewsDigestArticle, selected: dict[str, list[NewsEventCard]]) -> list[str]:
         notes = list(article.quality_notes or [])

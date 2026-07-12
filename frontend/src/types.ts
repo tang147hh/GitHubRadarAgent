@@ -323,6 +323,18 @@ export type NewsDetailResult = {
   extraction_error?: string | null;
   word_count: number;
   original_language?: string | null;
+  cover_image_url?: string | null;
+  cover_image_source_url?: string | null;
+  cover_image_alt?: string | null;
+  cover_image_status?: string;
+  image_candidates?: NewsImageCandidate[];
+};
+
+export type NewsImageCandidate = {
+  url: string;
+  source_url: string;
+  alt?: string | null;
+  source_type?: string;
 };
 
 export type NewsSelectionItem = {
@@ -367,6 +379,7 @@ export type NewsArticlePlan = {
   lead_hook: string;
   event_summary: string;
   key_facts: string[];
+  valuable_comment_insights?: string[];
   background_context: string[];
   why_it_matters: string[];
   reader_takeaways: string[];
@@ -385,6 +398,103 @@ export type NewsArticlePlan = {
 export type NewsArticlePlanRequest = {
   selection_id?: string | null;
   use_latest?: boolean;
+};
+
+export type NewsArticle = {
+  exists?: boolean;
+  article_id: string;
+  plan_id: string;
+  selection_id: string;
+  generated_at: string;
+  title: string;
+  subtitle: string;
+  content_markdown: string;
+  primary_news_id: string;
+  source_news_ids: string[];
+  source_urls: string[];
+  word_count: number;
+  generation_mode: "llm" | "fallback" | string;
+  used_full_text_count: number;
+  used_summary_only_count: number;
+  warnings: string[];
+  factual_boundaries: string[];
+  publish_ready: boolean;
+  quality_report?: NewsArticleQualityReport | null;
+  quality_score?: number;
+  quality_publish_ready?: boolean;
+  publish_polished?: boolean;
+  publish_package_path?: string | null;
+  cover_image_url?: string | null;
+  cover_image_source_url?: string | null;
+  cover_image_alt?: string | null;
+  cover_image_status?: string;
+};
+
+export type NewsArticleListItem = {
+  article_id: string;
+  title?: string;
+  subtitle?: string;
+  generated_at?: string;
+  word_count?: number;
+  generation_mode?: string;
+  publish_ready?: boolean;
+  quality_score?: number | null;
+  quality_publish_ready?: boolean;
+  publish_polished?: boolean;
+  publish_package_path?: string | null;
+  cover_image_url?: string | null;
+  cover_image_source_url?: string | null;
+  cover_image_alt?: string | null;
+  cover_image_status?: string;
+  content_available?: boolean;
+  report_available?: boolean;
+  publish_available?: boolean;
+  package_available?: boolean;
+};
+
+export type NewsArticleListResponse = {
+  exists?: boolean;
+  articles?: NewsArticleListItem[];
+};
+
+export type NewsArticleWriteRequest = {
+  plan_id?: string | null;
+  use_latest?: boolean;
+};
+
+export type NewsArticleQualityIssue = {
+  issue_type?: string;
+  severity?: "low" | "medium" | "high" | string;
+  description?: string;
+  suggestion?: string;
+  evidence?: string | null;
+};
+
+export type NewsArticleQualityReport = {
+  article_id?: string;
+  title?: string;
+  total_score?: number;
+  publish_ready?: boolean;
+  title_score?: number;
+  opening_score?: number;
+  factual_integrity_score?: number;
+  source_link_score?: number;
+  insight_score?: number;
+  readability_score?: number;
+  originality_score?: number;
+  human_tone_score?: number;
+  structure_naturalness_score?: number;
+  issues?: NewsArticleQualityIssue[];
+  strengths?: string[];
+  rewrite_recommendations?: string[];
+  summary?: string;
+};
+
+export type NewsArticleReviewRequest = {
+  article_id?: string | null;
+  use_latest?: boolean;
+  threshold?: number;
+  polish?: boolean;
 };
 
 export type NewsCollectRequest = {

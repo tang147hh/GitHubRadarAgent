@@ -52,6 +52,13 @@ class NewsItem(BaseModel):
     translation_error: Optional[str] = None
 
 
+class NewsImageCandidate(BaseModel):
+    url: str = ""
+    source_url: str = ""
+    alt: Optional[str] = None
+    source_type: str = "unknown"
+
+
 class NewsDetailResult(BaseModel):
     news_id: str = ""
     title: str = ""
@@ -71,6 +78,11 @@ class NewsDetailResult(BaseModel):
     extraction_error: Optional[str] = None
     word_count: int = 0
     original_language: Optional[str] = None
+    cover_image_url: Optional[str] = None
+    cover_image_source_url: Optional[str] = None
+    cover_image_alt: Optional[str] = None
+    cover_image_status: str = "unknown"
+    image_candidates: List[NewsImageCandidate] = Field(default_factory=list)
 
 
 class NewsSelectionItem(BaseModel):
@@ -107,6 +119,7 @@ class NewsArticlePlan(BaseModel):
     lead_hook: str = ""
     event_summary: str = ""
     key_facts: List[str] = Field(default_factory=list)
+    valuable_comment_insights: List[str] = Field(default_factory=list)
     background_context: List[str] = Field(default_factory=list)
     why_it_matters: List[str] = Field(default_factory=list)
     reader_takeaways: List[str] = Field(default_factory=list)
@@ -120,6 +133,63 @@ class NewsArticlePlan(BaseModel):
     writing_style: str = ""
     warnings: List[str] = Field(default_factory=list)
     generation_mode: str = "fallback"
+
+
+class NewsArticleQualityIssue(BaseModel):
+    issue_type: str = ""
+    severity: str = "low"
+    description: str = ""
+    suggestion: str = ""
+    evidence: Optional[str] = None
+
+
+class NewsArticleQualityReport(BaseModel):
+    article_id: str = ""
+    title: str = ""
+    total_score: float = 0.0
+    publish_ready: bool = False
+    title_score: float = 0.0
+    opening_score: float = 0.0
+    factual_integrity_score: float = 0.0
+    source_link_score: float = 0.0
+    insight_score: float = 0.0
+    readability_score: float = 0.0
+    originality_score: float = 0.0
+    human_tone_score: float = 0.0
+    structure_naturalness_score: float = 0.0
+    issues: List[NewsArticleQualityIssue] = Field(default_factory=list)
+    strengths: List[str] = Field(default_factory=list)
+    rewrite_recommendations: List[str] = Field(default_factory=list)
+    summary: str = ""
+
+
+class NewsArticle(BaseModel):
+    article_id: str = ""
+    plan_id: str = ""
+    selection_id: str = ""
+    generated_at: str = ""
+    title: str = ""
+    subtitle: str = ""
+    content_markdown: str = ""
+    primary_news_id: str = ""
+    source_news_ids: List[str] = Field(default_factory=list)
+    source_urls: List[str] = Field(default_factory=list)
+    word_count: int = 0
+    generation_mode: str = "fallback"
+    used_full_text_count: int = 0
+    used_summary_only_count: int = 0
+    warnings: List[str] = Field(default_factory=list)
+    factual_boundaries: List[str] = Field(default_factory=list)
+    publish_ready: bool = False
+    quality_report: Optional[NewsArticleQualityReport] = None
+    quality_score: float = 0.0
+    quality_publish_ready: bool = False
+    publish_polished: bool = False
+    publish_package_path: Optional[str] = None
+    cover_image_url: Optional[str] = None
+    cover_image_source_url: Optional[str] = None
+    cover_image_alt: Optional[str] = None
+    cover_image_status: str = "missing"
 
 
 class NewsCollectionResult(BaseModel):

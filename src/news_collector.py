@@ -326,16 +326,14 @@ class NewsCollectorService:
                 url = normalize_url(hit.get("url") or f"https://news.ycombinator.com/item?id={story_id}")
                 if not title or not url:
                     continue
-                points = float(hit.get("points") or 0)
-                comments = float(hit.get("num_comments") or 0)
-                summary = f"Hacker News discussion. points={int(points)}, comments={int(comments)}"
+                summary = "This is a Hacker News developer community item."
                 items.append(
                     NewsItem(
                         id=_safe_id("hn", story_id, title, url),
                         title=title,
                         url=url,
                         source="Hacker News",
-                        source_type="hackernews",
+                        source_type="community_discussion",
                         published_at=parse_datetime(hit.get("created_at")).isoformat(timespec="seconds").replace("+00:00", "Z")
                         if parse_datetime(hit.get("created_at"))
                         else None,
@@ -343,9 +341,9 @@ class NewsCollectorService:
                         summary=summary,
                         content_availability="summary_only",
                         language="en",
-                        topics=["community", "discussion"],
+                        topics=["community"],
                         keywords=[keyword],
-                        raw_score=points + comments * 0.5,
+                        raw_score=0.0,
                         duplicate_key=duplicate_key_for(title, url),
                     )
                 )

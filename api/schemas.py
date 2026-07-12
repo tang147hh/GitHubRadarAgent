@@ -245,6 +245,40 @@ class NewsArticlePlanRequest(BaseModel):
         return selection_id
 
 
+class NewsArticleWriteRequest(BaseModel):
+    plan_id: Optional[str] = None
+    use_latest: bool = True
+
+    @validator("plan_id")
+    def validate_plan_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        plan_id = value.strip()
+        if not plan_id:
+            return None
+        if "/" in plan_id or "\\" in plan_id or ".." in plan_id or len(plan_id) > 180:
+            raise ValueError("plan_id must be a safe id.")
+        return plan_id
+
+
+class NewsArticleReviewRequest(BaseModel):
+    article_id: Optional[str] = None
+    use_latest: bool = True
+    threshold: float = Field(default=80, ge=0, le=100)
+    polish: bool = True
+
+    @validator("article_id")
+    def validate_article_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        article_id = value.strip()
+        if not article_id:
+            return None
+        if "/" in article_id or "\\" in article_id or ".." in article_id or len(article_id) > 180:
+            raise ValueError("article_id must be a safe id.")
+        return article_id
+
+
 class UiRunDefaults(BaseModel):
     limit_per_keyword: int = Field(default=3, ge=1, le=50)
     score_top: int = Field(default=30, ge=1, le=100)
@@ -273,3 +307,17 @@ class UiSettings(BaseModel):
     run_defaults: UiRunDefaults = Field(default_factory=UiRunDefaults)
     discovery: UiDiscoverySettings
     frontend: UiFrontendSettings = Field(default_factory=UiFrontendSettings)
+
+
+class AgentToolCallRequest(BaseModel):
+    tool_name: str = Field(..., min_length=1, max_length=160)
+    arguments: dict = Field(default_factory=dict)
+
+    @validator("tool_name")
+    def validate_tool_name(cls, value: str) -> str:
+        tool_name = value.strip()
+        if not tool_name:
+            raise ValueError("tool_name is required.")
+        if "/" in tool_name or "\\" in tool_name or ".." in tool_name:
+            raise ValueError("tool_name must be a registered tool name.")
+        return tool_name

@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from src.config import get_settings
+from src.interaction_metrics import strip_interaction_metric_text, without_interaction_metric_values
 from src.models import NewsCollectionResult, NewsEventCard, NewsEventResult, NewsItem, NewsScore, NewsScoringResult
 from src.news_collector import normalize_url, parse_datetime, utc_now_iso
 from src.news_scorer import CATEGORY_SECTION_MAP
@@ -446,7 +447,7 @@ class NewsEventBuilderService:
     ) -> NewsEventCard:
         primary_item, primary_score = max(cluster, key=self._primary_sort_key)
         sources = _unique([item.source for item, _score in cluster])
-        source_types = _unique([item.source_type for item, _score in cluster])
+        source_types = _unique([self._event_source_type(item) for item, _score in cluster])
         urls = _unique([item.url or score.url for item, score in cluster])
         related_titles = _unique([item.title_zh or item.title or score.title_zh or score.title for item, score in cluster])
         related_news_ids = _unique([score.news_id or item.id for item, score in cluster])
@@ -504,7 +505,7 @@ class NewsEventBuilderService:
             keywords=keywords,
             related_news_ids=related_news_ids,
             related_titles=related_titles,
-            reasons=reasons[:8],
+            reasons=without_interaction_metric_values(reasons)[:8],
             warnings=warnings,
             content_availability=availability,
         )
@@ -537,10 +538,12 @@ class NewsEventBuilderService:
         score += min(14.0, max(0, len(sources) - 1) * 4.0 + max(0, len(cluster) - 1) * 1.2)
         if any(self._is_official(item, news_score) for item, news_score in cluster):
             score += 6.0
-        cross_types = {"official_rss", "hackernews", "gdelt", "arxiv", "rsshub"} & {source_type.casefold() for source_type in source_types}
+        cross_types = {"official_rss", "community_discussion", "gdelt", "arxiv", "rsshub"} & {
+            self._event_source_type_from_text(source_type) for source_type in source_types
+        }
         if len(cross_types) >= 2:
             score += 5.0
-        if {"hackernews", "official_rss"} <= cross_types or {"arxiv", "hackernews"} <= cross_types:
+        if {"community_discussion", "official_rss"} <= cross_types or {"arxiv", "community_discussion"} <= cross_types:
             score += 3.0
         score += FRESHNESS_BONUS.get(freshness or "unknown", -1.0)
         if all(news_score.category == "noise" or news_score.total_score < 45 for _item, news_score in cluster):
@@ -567,7 +570,7 @@ class NewsEventBuilderService:
             summary = item.summary_zh if zh else item.summary
             if not summary and zh:
                 summary = item.summary
-            cleaned = _short_text(summary or "", max_length=220)
+            cleaned = _short_text(strip_interaction_metric_text(summary or ""), max_length=220)
             if cleaned and cleaned.casefold() not in {part.casefold() for part in parts}:
                 parts.append(cleaned)
             if len(parts) >= 3:
@@ -581,8 +584,8 @@ class NewsEventBuilderService:
                 item.title_zh or "",
                 score.title or "",
                 score.title_zh or "",
-                item.summary or "",
-                item.summary_zh or "",
+                strip_interaction_metric_text(item.summary or ""),
+                strip_interaction_metric_text(item.summary_zh or ""),
                 " ".join(item.keywords or []),
                 " ".join(score.keywords or []),
                 " ".join(item.topics or []),
@@ -637,6 +640,18 @@ class NewsEventBuilderService:
             return True
         combined = f"{item.source} {score.source} {urlparse(item.url or score.url or '').netloc}".casefold()
         return any(hint in combined for hint in OFFICIAL_HINTS)
+
+    def _event_source_type(self, item: NewsItem) -> str:
+        source_type = (item.source_type or "").casefold()
+        if source_type == "hackernews" or "hacker news" in (item.source or "").casefold():
+            return "community_discussion"
+        return item.source_type or "unknown"
+
+    def _event_source_type_from_text(self, value: str) -> str:
+        source_type = (value or "").casefold()
+        if source_type == "hackernews":
+            return "community_discussion"
+        return source_type
 
     def _timestamp(self, value: str | None) -> float:
         parsed = parse_datetime(value)

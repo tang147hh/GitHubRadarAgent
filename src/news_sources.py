@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 
-SourceType = Literal["official_rss", "rsshub", "hackernews", "arxiv", "gdelt", "webpage"]
+SourceType = Literal["official_rss", "rsshub", "hackernews", "community_discussion", "arxiv", "gdelt", "webpage"]
 
 
 @dataclass(frozen=True)

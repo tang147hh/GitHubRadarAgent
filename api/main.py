@@ -6,7 +6,7 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,8 +15,11 @@ from pydantic import ValidationError
 
 from api.jobs import job_manager
 from api.schemas import (
+    AgentToolCallRequest,
     CustomArticleRequest,
     NewsArticlePlanRequest,
+    NewsArticleReviewRequest,
+    NewsArticleWriteRequest,
     NewsCollectRequest,
     NewsDigestWriteRequest,
     NewsDigestReviewRequest,
@@ -27,9 +30,13 @@ from api.schemas import (
     RunDailyRequest,
     UiSettings,
 )
+from src.agent_tools import build_default_tool_registry
 from src.config import get_settings
 from src.news_collector import NewsCollectorService, utc_now_iso
 from src.news_article_planner import NewsArticlePlannerService
+from src.news_article_polisher import NewsArticlePolisherService
+from src.news_article_quality import NewsArticleQualityEvaluator
+from src.news_article_writer import NewsArticleWriterService
 from src.news_detail_service import NewsDetailService
 from src.news_digest_polisher import NewsDigestPolisherService
 from src.news_digest_quality import NewsDigestQualityEvaluator
@@ -98,6 +105,7 @@ SNAPSHOT_FILES = {
     "news_scores": "workspace/snapshots/news_scores_latest.json",
     "news_events": "workspace/snapshots/news_events_latest.json",
     "news_article_plan": "workspace/snapshots/news_article_plan_latest.json",
+    "news_article_review": "workspace/snapshots/news_article_review_latest.json",
     "news_digest": "workspace/snapshots/news_digest_latest.json",
     "news_digest_review": "workspace/snapshots/news_digest_review_latest.json",
 }
@@ -466,6 +474,156 @@ def _news_detail_api_payload(payload: dict[str, Any], content_text_limit: int = 
         copied["content_text_truncated"] = False
     copied.setdefault("exists", True)
     return copied
+
+
+def _news_article_date(article: dict[str, Any]) -> str:
+    generated_at = str(article.get("generated_at") or "")
+    if generated_at:
+        try:
+            return datetime.fromisoformat(generated_at.replace("Z", "+00:00")).date().isoformat()
+        except ValueError:
+            if DATE_PATTERN.fullmatch(generated_at[:10]):
+                return generated_at[:10]
+    return datetime.now().date().isoformat()
+
+
+def _news_article_output_path(article: dict[str, Any], suffix: str) -> Path:
+    article_id = _validate_safe_name(str(article.get("article_id") or ""))
+    generated_date = _news_article_date(article)
+    return _safe_output_path(generated_date, "news_articles", f"{article_id}{suffix}")
+
+
+def _news_article_payload(article_id: str) -> dict[str, Any]:
+    try:
+        article = NewsArticleWriterService().load_article(article_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError:
+        safe_id = _validate_safe_name(article_id)
+        candidates = sorted(
+            OUTPUTS_DIR.glob(f"*/news_articles/{safe_id}.md") if OUTPUTS_DIR.exists() else [],
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        if not candidates:
+            raise HTTPException(status_code=404, detail=f"News article not found: {article_id}")
+        path = candidates[0]
+        generated_date = path.parents[1].name
+        return {
+            "article_id": safe_id,
+            "plan_id": "",
+            "selection_id": "",
+            "generated_at": generated_date,
+            "title": _markdown_title(path) or safe_id,
+            "subtitle": "",
+            "content_markdown": read_text_file(path),
+            "primary_news_id": "",
+            "source_news_ids": [],
+            "source_urls": [],
+            "word_count": 0,
+            "generation_mode": "unknown",
+            "used_full_text_count": 0,
+            "used_summary_only_count": 0,
+            "warnings": [],
+            "factual_boundaries": [],
+            "publish_ready": False,
+            "quality_report": None,
+            "quality_score": 0.0,
+            "quality_publish_ready": False,
+            "publish_polished": False,
+            "publish_package_path": None,
+            "cover_image_url": None,
+            "cover_image_source_url": None,
+            "cover_image_alt": None,
+            "cover_image_status": "unknown",
+        }
+    return _model_dump(article)
+
+
+def _news_article_list_item(article: dict[str, Any]) -> dict[str, Any]:
+    article_id = str(article.get("article_id") or "")
+    quality_report = article.get("quality_report") if isinstance(article.get("quality_report"), dict) else {}
+    content_path = _news_article_output_path(article, ".md")
+    publish_path = _news_article_output_path(article, "_publish.md")
+    package_path = _news_article_output_path(article, "_package.md")
+    report_path = _news_article_output_path(article, "_report.md")
+    return {
+        "article_id": article_id,
+        "title": article.get("title") or article_id,
+        "subtitle": article.get("subtitle") or "",
+        "generated_at": article.get("generated_at") or "",
+        "word_count": article.get("word_count") or 0,
+        "generation_mode": article.get("generation_mode") or "fallback",
+        "publish_ready": bool(article.get("publish_ready", False)),
+        "quality_score": article.get("quality_score", quality_report.get("total_score", 0.0)),
+        "quality_publish_ready": article.get("quality_publish_ready", quality_report.get("publish_ready", False)),
+        "publish_polished": bool(article.get("publish_polished", False)),
+        "publish_package_path": article.get("publish_package_path"),
+        "cover_image_url": article.get("cover_image_url"),
+        "cover_image_source_url": article.get("cover_image_source_url"),
+        "cover_image_alt": article.get("cover_image_alt"),
+        "cover_image_status": article.get("cover_image_status") or "missing",
+        "content_available": content_path.exists() or bool(article.get("content_markdown")),
+        "report_available": report_path.exists(),
+        "publish_available": publish_path.exists(),
+        "package_available": package_path.exists(),
+    }
+
+
+def _news_article_list_payload() -> dict[str, Any]:
+    articles_dir = safe_project_path("workspace/news/articles")
+    article_paths = sorted(
+        articles_dir.glob("*.json") if articles_dir.exists() else [],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for path in article_paths:
+        try:
+            payload = read_json_file(path)
+        except HTTPException:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        article_id = str(payload.get("article_id") or path.stem)
+        if not article_id or article_id in seen:
+            continue
+        payload.setdefault("article_id", article_id)
+        seen.add(article_id)
+        items.append(_news_article_list_item(payload))
+
+    latest_path = safe_project_path("workspace/news/news_article_latest.json")
+    if latest_path.exists():
+        payload = read_json_file(latest_path)
+        if isinstance(payload, dict):
+            article_id = str(payload.get("article_id") or "")
+            if article_id and article_id not in seen:
+                seen.add(article_id)
+                items.insert(0, _news_article_list_item(payload))
+
+    if OUTPUTS_DIR.exists():
+        for path in sorted(OUTPUTS_DIR.glob("*/news_articles/*.md"), key=lambda item: item.stat().st_mtime, reverse=True):
+            stem = path.stem
+            if stem.endswith(("_report", "_publish", "_package", "_quality_report")) or stem in seen:
+                continue
+            try:
+                generated_date = path.parents[1].name
+            except IndexError:
+                generated_date = ""
+            payload = {
+                "article_id": stem,
+                "title": _markdown_title(path) or stem,
+                "generated_at": generated_date,
+                "word_count": 0,
+                "generation_mode": "unknown",
+                "cover_image_status": "unknown",
+            }
+            seen.add(stem)
+            items.append(_news_article_list_item(payload))
+
+    items.sort(key=lambda item: str(item.get("generated_at") or ""), reverse=True)
+    return {"exists": bool(items), "articles": items}
 
 
 def _latest_news_report_path() -> Path | None:
@@ -1090,6 +1248,28 @@ def health() -> dict[str, Any]:
     }
 
 
+def _agent_model_payload(model: Any) -> Any:
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    if hasattr(model, "dict"):
+        return model.dict()
+    return model
+
+
+@app.get("/api/agent/tools")
+def agent_tools(skill: Optional[str] = None) -> dict[str, Any]:
+    registry = build_default_tool_registry()
+    tools = registry.list_tools(skill_name=skill)
+    return {"tools": [_agent_model_payload(tool) for tool in tools]}
+
+
+@app.post("/api/agent/tools/call")
+def call_agent_tool(request: AgentToolCallRequest) -> dict[str, Any]:
+    registry = build_default_tool_registry()
+    result = registry.call(request.tool_name, request.arguments)
+    return _agent_model_payload(result)
+
+
 @app.get("/api/config/status")
 def config_status() -> dict[str, Any]:
     settings = get_settings()
@@ -1239,6 +1419,243 @@ def news_article_plan(plan_id: str) -> dict[str, Any]:
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"News article plan not found: {plan_id}")
     return {"exists": True, **_model_dump(plan)}
+
+
+@app.post("/api/news/article/write")
+def write_news_article(request: NewsArticleWriteRequest) -> dict[str, Any]:
+    payload = _model_dump(request)
+    try:
+        os.chdir(PROJECT_ROOT)
+        service = NewsArticleWriterService()
+        plan_id = payload.get("plan_id")
+        if plan_id:
+            article = service.write_by_plan_id(plan_id)
+        elif payload.get("use_latest", True):
+            article = service.write_latest()
+        else:
+            raise ValueError("plan_id is required when use_latest is false.")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"News article writing failed: {type(exc).__name__}: {exc}")
+    return {"exists": True, **_model_dump(article)}
+
+
+@app.get("/api/news/article/latest")
+def latest_news_article() -> dict[str, Any]:
+    try:
+        article = NewsArticleWriterService().load_latest_article()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return {"exists": True, **_model_dump(article)}
+
+
+@app.get("/api/news/articles")
+def news_articles() -> dict[str, Any]:
+    return _news_article_list_payload()
+
+
+def _latest_news_article_markdown_path(report: bool = False) -> Path:
+    article = NewsArticleWriterService().load_latest_article()
+    generated_date = article.generated_at[:10] if article.generated_at else datetime.now().date().isoformat()
+    suffix = "_report.md" if report else ".md"
+    return _safe_output_path(generated_date, "news_articles", f"{article.article_id}{suffix}")
+
+
+def _latest_news_article_publish_path(package: bool = False) -> Path:
+    article = NewsArticleWriterService().load_latest_article()
+    generated_date = article.generated_at[:10] if article.generated_at else datetime.now().date().isoformat()
+    suffix = "_package.md" if package else "_publish.md"
+    return _safe_output_path(generated_date, "news_articles", f"{article.article_id}{suffix}")
+
+
+@app.get("/api/news/article/latest/content")
+def latest_news_article_content() -> dict[str, Any]:
+    try:
+        path = _latest_news_article_markdown_path(report=False)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Latest news article Markdown was not found.")
+    return {
+        "exists": True,
+        "content_markdown": read_text_file(path),
+        "path": _relative_path(path),
+    }
+
+
+@app.get("/api/news/article/latest/report")
+def latest_news_article_report() -> dict[str, Any]:
+    try:
+        path = _latest_news_article_markdown_path(report=True)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Latest news article report was not found.")
+    return {
+        "exists": True,
+        "content_markdown": read_text_file(path),
+        "path": _relative_path(path),
+    }
+
+
+@app.post("/api/news/article/review")
+def review_news_article(request: NewsArticleReviewRequest) -> dict[str, Any]:
+    payload = _model_dump(request)
+    article_path = safe_project_path("workspace/news/news_article_latest.json")
+    if not article_path.exists() and not payload.get("article_id"):
+        raise HTTPException(status_code=404, detail="No news article found. Please run write-news-article first.")
+    try:
+        os.chdir(PROJECT_ROOT)
+        evaluator = NewsArticleQualityEvaluator()
+        polisher = NewsArticlePolisherService()
+        article_id = payload.get("article_id")
+        if article_id:
+            article = evaluator.load_article(article_id)
+        elif payload.get("use_latest", True):
+            article = evaluator.load_latest_article()
+        else:
+            raise ValueError("article_id is required when use_latest is false.")
+        plan, selection, details = evaluator.load_context_for_article(article)
+        report = evaluator.evaluate(article, plan, selection, details, threshold=payload.get("threshold", 80))
+        if payload.get("polish", True):
+            article = polisher.polish_article(article, report)
+            if article.publish_polished:
+                report = evaluator.evaluate(article, plan, selection, details, threshold=payload.get("threshold", 80))
+                article = _model_copy(
+                    article,
+                    {
+                        "quality_report": report,
+                        "quality_score": report.total_score,
+                        "quality_publish_ready": report.publish_ready,
+                        "publish_ready": report.publish_ready,
+                    },
+                )
+        else:
+            article = polisher.attach_quality(article, report)
+        article = polisher.generate_package(article, report)
+        polisher.save_article(article)
+        evaluator.save_report(article, report)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"News article review failed: {type(exc).__name__}: {exc}")
+    return {
+        "exists": True,
+        **_model_dump(article),
+        "quality_report": _model_dump(report),
+    }
+
+
+@app.get("/api/news/article/review/latest")
+def latest_news_article_review() -> dict[str, Any]:
+    article_path = safe_project_path("workspace/news/news_article_latest.json")
+    if not article_path.exists():
+        raise HTTPException(status_code=404, detail="No news article found. Please run write-news-article first.")
+    path = safe_project_path("workspace/news/news_article_review_latest.json")
+    if not path.exists():
+        return {
+            "exists": False,
+            "message": "News article has not been reviewed yet.",
+            "quality_report": None,
+        }
+    payload = read_json_file(path)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="Latest news article review JSON must be an object.")
+    return {"exists": True, "quality_report": payload, **payload}
+
+
+@app.get("/api/news/article/latest/publish")
+def latest_news_article_publish() -> dict[str, Any]:
+    try:
+        path = _latest_news_article_publish_path(package=False)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Latest news article publish Markdown was not found. Please review the article first.")
+    return {
+        "exists": True,
+        "content_markdown": read_text_file(path),
+        "path": _relative_path(path),
+    }
+
+
+@app.get("/api/news/article/latest/package")
+def latest_news_article_package() -> dict[str, Any]:
+    try:
+        path = _latest_news_article_publish_path(package=True)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Latest news article package was not found. Please review the article first.")
+    return {
+        "exists": True,
+        "content_markdown": read_text_file(path),
+        "path": _relative_path(path),
+    }
+
+
+@app.get("/api/news/article/{article_id}")
+def news_article(article_id: str) -> dict[str, Any]:
+    return {"exists": True, **_news_article_payload(article_id)}
+
+
+@app.get("/api/news/article/{article_id}/content")
+def news_article_content(article_id: str) -> dict[str, Any]:
+    article = _news_article_payload(article_id)
+    try:
+        path = _news_article_output_path(article, ".md")
+    except HTTPException:
+        path = None
+    if path is not None and path.exists():
+        return {"exists": True, "content_markdown": read_text_file(path), "path": _relative_path(path)}
+    return {
+        "exists": bool(article.get("content_markdown")),
+        "content_markdown": str(article.get("content_markdown") or ""),
+        "path": None,
+    }
+
+
+@app.get("/api/news/article/{article_id}/report")
+def news_article_report(article_id: str) -> dict[str, Any]:
+    article = _news_article_payload(article_id)
+    path = _news_article_output_path(article, "_report.md")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"News article report was not found: {article_id}")
+    return {"exists": True, "content_markdown": read_text_file(path), "path": _relative_path(path)}
+
+
+@app.get("/api/news/article/{article_id}/review")
+def news_article_review(article_id: str) -> dict[str, Any]:
+    article = _news_article_payload(article_id)
+    report = article.get("quality_report") if isinstance(article.get("quality_report"), dict) else None
+    if report is None:
+        return {"exists": False, "message": "News article has not been reviewed yet.", "quality_report": None}
+    return {"exists": True, "quality_report": report, **report}
+
+
+@app.get("/api/news/article/{article_id}/publish")
+def news_article_publish(article_id: str) -> dict[str, Any]:
+    article = _news_article_payload(article_id)
+    path = _news_article_output_path(article, "_publish.md")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"News article publish Markdown was not found: {article_id}")
+    return {"exists": True, "content_markdown": read_text_file(path), "path": _relative_path(path)}
+
+
+@app.get("/api/news/article/{article_id}/package")
+def news_article_package(article_id: str) -> dict[str, Any]:
+    article = _news_article_payload(article_id)
+    path = _news_article_output_path(article, "_package.md")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"News article package was not found: {article_id}")
+    return {"exists": True, "content_markdown": read_text_file(path), "path": _relative_path(path)}
 
 
 @app.get("/api/news/scores")

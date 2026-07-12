@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from src.config import get_settings
+from src.interaction_metrics import strip_interaction_metric_text, without_interaction_metric_values
 from src.llm_service import LLMService
 from src.models import NewsArticlePlan, NewsDetailResult, NewsItem, NewsSelectionContext
 from src.news_collector import utc_now_iso
@@ -141,7 +142,14 @@ class NewsArticlePlannerService:
         plan.selection_id = selection.selection_id
         plan.generated_at = plan.generated_at or utc_now_iso()
         plan.primary_news_id = selection.primary_news_id
+        plan.core_angle = strip_interaction_metric_text(plan.core_angle or "")
+        plan.lead_hook = strip_interaction_metric_text(plan.lead_hook or "")
+        plan.event_summary = strip_interaction_metric_text(plan.event_summary or "")
+        plan.writing_style = strip_interaction_metric_text(plan.writing_style or "")
         plan.source_urls = _unique(plan.source_urls or [detail.url for detail in loaded_details])
+        plan.valuable_comment_insights = without_interaction_metric_values(plan.valuable_comment_insights or [])
+        plan.key_facts = without_interaction_metric_values(plan.key_facts or [])
+        plan.why_it_matters = without_interaction_metric_values(plan.why_it_matters or [])
         plan.should_avoid = _unique(
             [
                 *(plan.should_avoid or []),
@@ -149,9 +157,18 @@ class NewsArticlePlannerService:
                 "不要写没有来源支撑的判断。",
                 "不要夸大技术、商业或监管影响。",
                 "不要使用空泛的 AI 报告腔。",
+                "完全忽略点赞数、评论数、points、comments 等互动数量。",
+                "不要用互动数量判断重要性，也不要写进核心角度、关键事实或为什么重要。",
+                "没有具体评论正文时，不得总结社区观点。",
             ]
         )
-        plan.factual_boundaries = _unique(plan.factual_boundaries or self._default_boundaries(primary_detail))
+        plan.factual_boundaries = _unique(
+            [
+                *(plan.factual_boundaries or self._default_boundaries(primary_detail)),
+                "互动数量已忽略，不作为事实或选题依据。",
+                "没有具体评论正文时，不得总结社区观点。",
+            ]
+        )
         plan.warnings = _unique([*warnings, *(plan.warnings or [])])
         plan.generation_mode = plan.generation_mode if plan.generation_mode in {"llm", "fallback"} else "fallback"
         self.save_plan(plan)
@@ -230,6 +247,7 @@ class NewsArticlePlannerService:
         ]
         sections = [
             ("关键事实", plan.key_facts),
+            ("有信息增量的评论正文洞察", plan.valuable_comment_insights),
             ("背景信息", plan.background_context),
             ("为什么重要", plan.why_it_matters),
             ("读者收获", plan.reader_takeaways),
@@ -311,6 +329,7 @@ class NewsArticlePlannerService:
             lead_hook=f"不要只看标题里最热闹的词，先看这件事具体改变了谁的使用方式、开发方式或判断依据：{_clean_text(title, 90)}。",
             event_summary=event_summary or f"主新闻报道了“{title}”。当前策划基于已保存的标题、摘要和可用正文，不补写未确认细节。",
             key_facts=key_facts or [f"主新闻标题：{title}", f"主新闻来源：{primary.source or '-'}", f"原文链接：{primary.url or '-'}"],
+            valuable_comment_insights=[],
             background_context=_unique(
                 [
                     "补充说明该事件发生在 AI 产品、模型能力、开发工具或行业规则持续变化的背景下。",
@@ -355,6 +374,8 @@ class NewsArticlePlannerService:
                 "不要写没有来源支撑的判断。",
                 "不要夸大影响。",
                 "不要使用空泛的 AI 报告腔。",
+                "完全忽略点赞数、评论数、points、comments 等互动数量。",
+                "没有具体评论正文时，不得总结社区观点。",
             ],
             source_urls=_unique([detail.url for detail in details]),
             factual_boundaries=self._default_boundaries(primary),
@@ -368,6 +389,10 @@ class NewsArticlePlannerService:
             "你是严谨的中文 AI 新闻文章策划编辑。你的任务是生成写作前策划，不写最终文章。"
             "只能基于给定新闻详情、摘要、标题和链接做判断；不能虚构官方确认、数据、融资、商业影响或技术能力。"
             "主新闻决定核心事件，supporting 新闻只能作为补充来源。"
+            "完全忽略点赞数、评论数、points、comments 等互动数量，不得用互动数量判断重要性。"
+            "不得把互动数量写进 core_angle、why_it_matters、key_facts。"
+            "只有当输入里实际包含具体评论正文，且评论有信息增量时，才可提炼 valuable_comment_insights；"
+            "如果只知道评论数量或没有评论正文，不得概括社区观点。"
             "标题不要标题党，core_angle 必须具体说明为什么值得 AI 圈关注。"
             "只输出 JSON 对象，不输出 Markdown 或解释。"
         )
@@ -376,15 +401,15 @@ class NewsArticlePlannerService:
         items = []
         for detail in details:
             role = "primary" if detail.news_id == selection.primary_news_id else "supporting"
-            body = detail.content_text or detail.content_preview or detail.summary_zh or detail.summary or ""
+            body = strip_interaction_metric_text(detail.content_text or detail.content_preview or detail.summary_zh or detail.summary or "")
             items.append(
                 {
                     "role": role,
                     "news_id": detail.news_id,
                     "title": detail.title,
                     "title_zh": detail.title_zh,
-                    "summary": detail.summary,
-                    "summary_zh": detail.summary_zh,
+                    "summary": strip_interaction_metric_text(detail.summary or ""),
+                    "summary_zh": strip_interaction_metric_text(detail.summary_zh or ""),
                     "url": detail.url,
                     "source": detail.source,
                     "published_at": detail.published_at,
@@ -399,6 +424,7 @@ class NewsArticlePlannerService:
             "lead_hook": "开头钩子",
             "event_summary": "事件摘要",
             "key_facts": ["必须来自新闻内容或摘要"],
+            "valuable_comment_insights": ["仅限实际抓取到且有信息增量的评论正文；没有则为空数组"],
             "background_context": ["需要补充的背景"],
             "why_it_matters": ["为什么重要"],
             "reader_takeaways": ["读者收获"],
@@ -414,6 +440,9 @@ class NewsArticlePlannerService:
         }
         return (
             "请根据 selection 和 news_details 生成新闻文章策划 JSON。\n\n"
+            "强约束：忽略点赞数、评论数、points、comments；不得用互动数量判断重要性；"
+            "不得把互动数量写进 core_angle、why_it_matters、key_facts。"
+            "如果没有具体评论正文，valuable_comment_insights 必须为空，且不得总结社区观点。\n\n"
             f"selection={json.dumps(_model_dump(selection), ensure_ascii=False)}\n\n"
             f"news_details={json.dumps(items, ensure_ascii=False)}\n\n"
             "返回字段必须与这个 schema 对齐：\n"
@@ -472,14 +501,14 @@ class NewsArticlePlannerService:
 
     def _detail_from_latest_item(self, item: NewsItem) -> NewsDetailResult:
         text = (item.content_text or "").strip() or None
-        summary_text = (item.summary_zh or item.summary or "").strip()
+        summary_text = strip_interaction_metric_text(item.summary_zh or item.summary or "").strip()
         availability = "full_text" if text else "summary_only" if summary_text else item.content_availability or "metadata_only"
         return NewsDetailResult(
             news_id=item.id,
             title=item.title or "",
             title_zh=item.title_zh,
-            summary=item.summary or "",
-            summary_zh=item.summary_zh,
+            summary=strip_interaction_metric_text(item.summary or ""),
+            summary_zh=strip_interaction_metric_text(item.summary_zh or ""),
             url=item.url or "",
             source=item.source or "",
             source_type=item.source_type or "",
@@ -496,8 +525,8 @@ class NewsArticlePlannerService:
 
     def _best_summary(self, detail: NewsDetailResult) -> str:
         return _clean_text(
-            detail.summary_zh
-            or detail.summary
+            strip_interaction_metric_text(detail.summary_zh or "")
+            or strip_interaction_metric_text(detail.summary or "")
             or detail.content_preview
             or detail.content_text
             or detail.title_zh
@@ -511,7 +540,7 @@ class NewsArticlePlannerService:
             title = detail.title_zh or detail.title
             if title:
                 facts.append(f"{detail.source or '来源'}：{_clean_text(title, 140)}")
-            summary = detail.summary_zh or detail.summary
+            summary = strip_interaction_metric_text(detail.summary_zh or detail.summary or "")
             if summary:
                 facts.append(_clean_text(summary, 220))
             if detail.published_at:
@@ -524,6 +553,8 @@ class NewsArticlePlannerService:
             "社区讨论、媒体解读或二手来源要标注为讨论/解读。",
             "没有量化数据时，不能推断市场份额、收入或用户规模变化。",
             "不能从单条新闻直接推断长期商业影响。",
+            "互动数量已忽略，不作为事实或选题依据。",
+            "没有具体评论正文时，不得总结社区观点。",
         ]
         if primary.content_availability != "full_text":
             boundaries.append("主新闻全文不可用，不能补写正文中可能存在但当前未看到的细节。")

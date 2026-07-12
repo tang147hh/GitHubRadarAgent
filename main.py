@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import json
 import time as time_module
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from src.agent_tools import build_default_tool_registry
 from src.news_collector import NewsCollectorService
 from src.news_detail_service import NewsDetailService
+from src.news_article_writer import NewsArticleWriterService
 from src.news_article_planner import NewsArticlePlannerService
+from src.news_article_polisher import NewsArticlePolisherService
+from src.news_article_quality import NewsArticleQualityEvaluator
 from src.news_digest_polisher import NewsDigestPolisherService
 from src.news_digest_quality import NewsDigestQualityEvaluator
 from src.news_digest_writer import NewsDigestWriterService
@@ -197,6 +202,88 @@ def _run_plan_news_article_command(selection_id: str | None = None, latest: bool
     return plan
 
 
+def _run_write_news_article_command(plan_id: str | None = None, latest: bool = True):
+    service = NewsArticleWriterService()
+    if plan_id and not latest:
+        article = service.write_by_plan_id(plan_id)
+    elif plan_id:
+        article = service.write_by_plan_id(plan_id)
+    else:
+        article = service.write_latest()
+    generated_date = article.generated_at[:10] if article.generated_at else datetime.now().date().isoformat()
+    print(f"Generated news article: {article.article_id}")
+    print(f"Plan: {article.plan_id}")
+    print(f"Selection: {article.selection_id}")
+    print(f"Primary news: {article.primary_news_id}")
+    print(f"Generation mode: {article.generation_mode}")
+    print(f"Publish ready: {'yes' if article.publish_ready else 'no'}")
+    print("JSON: workspace/news/news_article_latest.json")
+    print(f"Article JSON: workspace/news/articles/{article.article_id}.json")
+    print("Snapshot: workspace/snapshots/news_article_latest.json")
+    print(f"Markdown: outputs/{generated_date}/news_articles/{article.article_id}.md")
+    print(f"Report: outputs/{generated_date}/news_articles/{article.article_id}_report.md")
+    if article.title:
+        print(f"Title: {article.title}")
+    if article.warnings:
+        print("Warnings:")
+        for warning in article.warnings[:10]:
+            print(f"- {warning}")
+    return article
+
+
+def _run_review_news_article_command(
+    article_id: str | None = None,
+    latest: bool = True,
+    threshold: float = 80.0,
+    polish: bool = True,
+):
+    evaluator = NewsArticleQualityEvaluator()
+    polisher = NewsArticlePolisherService()
+    if article_id and not latest:
+        article = evaluator.load_article(article_id)
+    elif article_id:
+        article = evaluator.load_article(article_id)
+    else:
+        article = evaluator.load_latest_article()
+
+    plan, selection, details = evaluator.load_context_for_article(article)
+    report = evaluator.evaluate(article, plan, selection, details, threshold=threshold)
+    if polish:
+        article = polisher.polish_article(article, report)
+        if article.publish_polished:
+            report = evaluator.evaluate(article, plan, selection, details, threshold=threshold)
+            article = _model_copy(
+                article,
+                {
+                    "quality_report": report,
+                    "quality_score": report.total_score,
+                    "quality_publish_ready": report.publish_ready,
+                    "publish_ready": report.publish_ready,
+                },
+            )
+    else:
+        article = polisher.attach_quality(article, report)
+
+    article = polisher.generate_package(article, report)
+    polisher.save_article(article)
+    evaluator.save_report(article, report)
+
+    generated_date = article.generated_at[:10] if article.generated_at else datetime.now().date().isoformat()
+    print(f"Reviewed news article. Score: {report.total_score:.1f}. Publish ready: {'yes' if report.publish_ready else 'no'}.")
+    print(f"Article: {article.article_id}")
+    print(f"Polished: {'yes' if article.publish_polished else 'no'}")
+    print("JSON: workspace/news/news_article_review_latest.json")
+    print("Snapshot: workspace/snapshots/news_article_review_latest.json")
+    print(f"Quality report: outputs/{generated_date}/news_articles/{article.article_id}_quality_report.md")
+    print(f"Publish Markdown: outputs/{generated_date}/news_articles/{article.article_id}_publish.md")
+    print(f"Package: outputs/{generated_date}/news_articles/{article.article_id}_package.md")
+    if report.issues:
+        print("Top issues:")
+        for issue in report.issues[:5]:
+            print(f"- [{issue.severity}] {issue.issue_type}: {issue.description}")
+    return {"article": article, "quality_report": report}
+
+
 def _run_score_news_command(top: int = 20, min_score: float = 60.0):
     result = NewsScoringService().score_latest(top=top, min_score=min_score)
     print(f"Scored {result.total_count} news items. Recommended {result.recommended_count}.")
@@ -352,6 +439,51 @@ def _print_custom_article_result(result: dict) -> None:
     print(f"Report: {result.get('report_path') or '-'}")
 
 
+def _parse_agent_tool_args(args_json: str) -> dict:
+    try:
+        payload = json.loads(args_json or "{}")
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"--args-json must be valid JSON: {exc.msg}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("--args-json must decode to a JSON object.")
+    return payload
+
+
+def _print_agent_tools(skill_name: str | None = None) -> None:
+    tools = build_default_tool_registry().list_tools(skill_name=skill_name)
+    if Console is not None and Table is not None:
+        table = Table(title="Agent Tools")
+        table.add_column("Name", style="cyan", no_wrap=True)
+        table.add_column("Skill")
+        table.add_column("Description")
+        table.add_column("Tags")
+        for tool in tools:
+            table.add_row(tool.name, tool.skill_name, tool.description, ", ".join(tool.tags))
+        Console().print(table)
+        return
+
+    for tool in tools:
+        print(f"{tool.name}")
+        print(f"  skill_name: {tool.skill_name}")
+        print(f"  description: {tool.description}")
+        print(f"  tags: {', '.join(tool.tags)}")
+
+
+def _print_agent_tool_result(result) -> None:
+    print(f"success: {'true' if result.success else 'false'}")
+    print(f"result_summary: {result.result_summary}")
+    print("artifacts:")
+    for artifact in result.artifacts:
+        print(f"- {artifact}")
+    if not result.artifacts:
+        print("-")
+    print(f"error: {result.error or '-'}")
+    if result.warnings:
+        print("warnings:")
+        for warning in result.warnings[:10]:
+            print(f"- {warning}")
+
+
 def _schedule_daily(
     run_time: str = "09:00",
     limit_per_keyword: int = 5,
@@ -408,6 +540,38 @@ def _schedule_daily(
 
 if typer is not None:
     app = typer.Typer(help="GitHubRadarAgent CLI")
+    agent_tools_app = typer.Typer(help="List and call registered Agent Tools.")
+    app.add_typer(agent_tools_app, name="agent-tools")
+
+
+    @agent_tools_app.command("list")
+    def agent_tools_list(
+        skill: Optional[str] = typer.Option(
+            None,
+            "--skill",
+            help="Filter tools by skill name.",
+        ),
+    ) -> None:
+        """List registered Agent Tools."""
+        _print_agent_tools(skill_name=skill)
+
+
+    @agent_tools_app.command("call")
+    def agent_tools_call(
+        tool_name: str = typer.Argument(..., help="Registered tool name."),
+        args_json: str = typer.Option(
+            "{}",
+            "--args-json",
+            help="Tool arguments as a JSON object.",
+        ),
+    ) -> None:
+        """Call one registered Agent Tool synchronously."""
+        try:
+            arguments = _parse_agent_tool_args(args_json)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        result = build_default_tool_registry().call(tool_name, arguments)
+        _print_agent_tool_result(result)
 
 
     @app.command("run-daily")
@@ -829,6 +993,54 @@ if typer is not None:
         _run_plan_news_article_command(selection_id=selection_id, latest=latest)
 
 
+    @app.command("write-news-article")
+    def write_news_article(
+        plan_id: Optional[str] = typer.Option(
+            None,
+            "--plan-id",
+            help="Plan id from workspace/news/plans. Defaults to latest plan.",
+        ),
+        latest: bool = typer.Option(
+            True,
+            "--latest/--no-latest",
+            help="Use workspace/news/news_article_plan_latest.json when --plan-id is not provided.",
+        ),
+    ) -> None:
+        """Generate a publish-ready Chinese WeChat article from the latest AI news plan."""
+        if not latest and not plan_id:
+            raise typer.BadParameter("No plan specified. Use --latest or pass --plan-id.")
+        _run_write_news_article_command(plan_id=plan_id, latest=latest)
+
+
+    @app.command("review-news-article")
+    def review_news_article(
+        article_id: Optional[str] = typer.Option(
+            None,
+            "--article-id",
+            help="Article id from workspace/news/articles. Defaults to latest article.",
+        ),
+        latest: bool = typer.Option(
+            True,
+            "--latest/--no-latest",
+            help="Use workspace/news/news_article_latest.json when --article-id is not provided.",
+        ),
+        threshold: float = typer.Option(
+            80,
+            "--threshold",
+            help="Minimum total quality score required for publish_ready.",
+        ),
+        polish: bool = typer.Option(
+            True,
+            "--polish/--no-polish",
+            help="Lightly polish the article before packaging.",
+        ),
+    ) -> None:
+        """Review, optionally polish, and package the latest AI news article."""
+        if not latest and not article_id:
+            raise typer.BadParameter("No article specified. Use --latest or pass --article-id.")
+        _run_review_news_article_command(article_id=article_id, latest=latest, threshold=threshold, polish=polish)
+
+
     @app.command("build-news-events")
     def build_news_events(
         top: int = typer.Option(
@@ -1178,6 +1390,57 @@ def _run_with_argparse(argv: Optional[list[str]] = None) -> None:
     )
     plan_news_article_parser.set_defaults(latest=True)
 
+    write_news_article_parser = subparsers.add_parser(
+        "write-news-article",
+        help="Generate a publish-ready Chinese WeChat article from the latest AI news plan.",
+    )
+    write_news_article_parser.add_argument("--plan-id", default=None)
+    write_news_article_parser.add_argument(
+        "--latest",
+        dest="latest",
+        action="store_true",
+        help="Use workspace/news/news_article_plan_latest.json.",
+    )
+    write_news_article_parser.add_argument(
+        "--no-latest",
+        dest="latest",
+        action="store_false",
+        help="Require --plan-id instead of using the latest plan.",
+    )
+    write_news_article_parser.set_defaults(latest=True)
+
+    review_news_article_parser = subparsers.add_parser(
+        "review-news-article",
+        help="Review, optionally polish, and package the latest AI news article.",
+    )
+    review_news_article_parser.add_argument("--article-id", default=None)
+    review_news_article_parser.add_argument("--threshold", type=float, default=80.0)
+    review_news_article_parser.add_argument(
+        "--latest",
+        dest="latest",
+        action="store_true",
+        help="Use workspace/news/news_article_latest.json.",
+    )
+    review_news_article_parser.add_argument(
+        "--no-latest",
+        dest="latest",
+        action="store_false",
+        help="Require --article-id instead of using the latest article.",
+    )
+    review_news_article_parser.add_argument(
+        "--polish",
+        dest="polish",
+        action="store_true",
+        help="Lightly polish the article before packaging.",
+    )
+    review_news_article_parser.add_argument(
+        "--no-polish",
+        dest="polish",
+        action="store_false",
+        help="Review and package without changing the article text.",
+    )
+    review_news_article_parser.set_defaults(latest=True, polish=True)
+
     build_news_events_parser = subparsers.add_parser(
         "build-news-events",
         help="Merge latest scored AI news into event cards.",
@@ -1223,10 +1486,28 @@ def _run_with_argparse(argv: Optional[list[str]] = None) -> None:
         help="Number of final articles to package with README images.",
     )
 
+    agent_tools_parser = subparsers.add_parser("agent-tools", help="List or call registered Agent Tools.")
+    agent_tools_subparsers = agent_tools_parser.add_subparsers(dest="agent_tools_command", required=True)
+    agent_tools_list_parser = agent_tools_subparsers.add_parser("list", help="List registered Agent Tools.")
+    agent_tools_list_parser.add_argument("--skill", default=None, help="Filter tools by skill name.")
+    agent_tools_call_parser = agent_tools_subparsers.add_parser("call", help="Call one registered Agent Tool.")
+    agent_tools_call_parser.add_argument("tool_name", help="Registered tool name.")
+    agent_tools_call_parser.add_argument("--args-json", default="{}", help="Tool arguments as a JSON object.")
+
     args = parser.parse_args(argv)
     orchestrator = DailyOrchestrator()
 
-    if args.command == "run-daily":
+    if args.command == "agent-tools":
+        if args.agent_tools_command == "list":
+            _print_agent_tools(skill_name=args.skill)
+        elif args.agent_tools_command == "call":
+            try:
+                arguments = _parse_agent_tool_args(args.args_json)
+            except ValueError as exc:
+                raise SystemExit(str(exc)) from exc
+            result = build_default_tool_registry().call(args.tool_name, arguments)
+            _print_agent_tool_result(result)
+    elif args.command == "run-daily":
         orchestrator.run_daily(
             limit_per_keyword=args.limit_per_keyword,
             score_top=args.score_top,
@@ -1311,6 +1592,19 @@ def _run_with_argparse(argv: Optional[list[str]] = None) -> None:
         if not args.latest and not args.selection_id:
             raise SystemExit("No selection specified. Use --latest or pass --selection-id.")
         _run_plan_news_article_command(selection_id=args.selection_id, latest=args.latest)
+    elif args.command == "write-news-article":
+        if not args.latest and not args.plan_id:
+            raise SystemExit("No plan specified. Use --latest or pass --plan-id.")
+        _run_write_news_article_command(plan_id=args.plan_id, latest=args.latest)
+    elif args.command == "review-news-article":
+        if not args.latest and not args.article_id:
+            raise SystemExit("No article specified. Use --latest or pass --article-id.")
+        _run_review_news_article_command(
+            article_id=args.article_id,
+            latest=args.latest,
+            threshold=args.threshold,
+            polish=args.polish,
+        )
     elif args.command == "build-news-events":
         _run_build_news_events_command(
             top=args.top,

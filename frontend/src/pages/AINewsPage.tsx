@@ -1,5 +1,6 @@
-import { Check, Clipboard, Download, ExternalLink, Filter, RefreshCw, Save, Sparkles, Star, Trash2, X } from "lucide-react";
+import { Check, Clipboard, Download, ExternalLink, FileText, Filter, RefreshCw, Save, Sparkles, Star, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import {
   ApiError,
   buildNewsEvents,
@@ -7,8 +8,21 @@ import {
   createNewsArticlePlan,
   createNewsSelection,
   fetchNewsDetail,
+  fetchLatestNewsArticle,
+  fetchLatestNewsArticleContent,
+  fetchLatestNewsArticlePackage,
+  fetchLatestNewsArticlePublish,
+  fetchLatestNewsArticleReport,
+  fetchLatestNewsArticleReview,
   fetchLatestNewsArticlePlan,
   fetchLatestNews,
+  fetchNewsArticle,
+  fetchNewsArticleContent,
+  fetchNewsArticlePackage,
+  fetchNewsArticlePublish,
+  fetchNewsArticleReport,
+  fetchNewsArticleReview,
+  fetchNewsArticles,
   fetchNewsDigest,
   fetchNewsDigestContent,
   fetchNewsDigestPackage,
@@ -20,13 +34,19 @@ import {
   fetchNewsScoresReport,
   refreshNewsDetail,
   scoreNews,
+  reviewNewsArticle,
   reviewNewsDigest,
+  writeNewsArticle,
   writeNewsDigest,
 } from "../api";
 import { copyText, downloadMarkdown } from "../fileUtils";
 import type { Translation } from "../i18n";
+import { markdownImageSrc } from "../markdownImages";
 import type {
   NewsCollectRequest,
+  NewsArticle,
+  NewsArticleListItem,
+  NewsArticleQualityReport,
   NewsArticlePlan,
   NewsCollectionResult,
   NewsDetailResult,
@@ -35,6 +55,7 @@ import type {
   NewsEventCard,
   NewsEventResult,
   NewsItem,
+  NewsReportContent,
   NewsScore,
   NewsSelectionContext,
   NewsScoringResult,
@@ -60,7 +81,7 @@ type NewsFilters = {
   search: string;
 };
 
-type NewsTab = "list" | "recommended" | "events" | "articlePlan" | "digest" | "collectionReport" | "scoreReport" | "eventReport";
+type NewsTab = "list" | "recommended" | "events" | "articlePlan" | "article" | "digest" | "collectionReport" | "scoreReport" | "eventReport";
 
 const SOURCE_OPTIONS = ["official", "hn", "arxiv", "gdelt", "rsshub"];
 const MAX_SELECTED_NEWS = 5;
@@ -149,6 +170,7 @@ const emptyArticlePlan = (): NewsArticlePlan => ({
   lead_hook: "",
   event_summary: "",
   key_facts: [],
+  valuable_comment_insights: [],
   background_context: [],
   why_it_matters: [],
   reader_takeaways: [],
@@ -163,6 +185,61 @@ const emptyArticlePlan = (): NewsArticlePlan => ({
   warnings: [],
   generation_mode: "fallback",
 });
+
+const emptyNewsArticle = (): NewsArticle => ({
+  exists: false,
+  article_id: "",
+  plan_id: "",
+  selection_id: "",
+  generated_at: "",
+  title: "",
+  subtitle: "",
+  content_markdown: "",
+  primary_news_id: "",
+  source_news_ids: [],
+  source_urls: [],
+  word_count: 0,
+  generation_mode: "fallback",
+  used_full_text_count: 0,
+  used_summary_only_count: 0,
+  warnings: [],
+  factual_boundaries: [],
+  publish_ready: false,
+  quality_report: null,
+  quality_score: 0,
+  quality_publish_ready: false,
+  publish_polished: false,
+  publish_package_path: null,
+  cover_image_url: null,
+  cover_image_source_url: null,
+  cover_image_alt: null,
+  cover_image_status: "missing",
+});
+
+function validRemoteImageUrl(value?: string | null) {
+  return typeof value === "string" && /^https?:\/\//i.test(value.trim());
+}
+
+function normalizeNewsArticlePayload(payload: NewsArticle, contentMarkdown = ""): NewsArticle {
+  const qualityReport = payload.quality_report || null;
+  return {
+    ...emptyNewsArticle(),
+    ...payload,
+    content_markdown: contentMarkdown || payload.content_markdown || "",
+    source_news_ids: asArray(payload.source_news_ids),
+    source_urls: asArray(payload.source_urls),
+    warnings: asArray(payload.warnings),
+    factual_boundaries: asArray(payload.factual_boundaries),
+    quality_report: qualityReport
+      ? {
+          ...qualityReport,
+          issues: asArray(qualityReport.issues),
+          strengths: asArray(qualityReport.strengths),
+          rewrite_recommendations: asArray(qualityReport.rewrite_recommendations),
+        }
+      : null,
+  };
+}
 
 function uniqueValues(items: NewsItem[], key: keyof Pick<NewsItem, "source" | "source_type" | "freshness" | "content_availability">) {
   return Array.from(new Set(items.map((item) => item[key]).filter(Boolean))).sort();
@@ -197,6 +274,27 @@ function extractionStatusLabel(value: string | undefined | null, t: Translation)
   if (value === "failed") return t.news.extractionFailed;
   if (value === "skipped") return t.news.extractionSkipped;
   return value || "-";
+}
+
+function MarkdownPreview({ markdown, sourcePath, long = false }: { markdown: string; sourcePath?: string; long?: boolean }) {
+  return (
+    <article className={`markdown-preview markdown-body full-markdown news-markdown-preview ${long ? "long" : ""}`}>
+      <ReactMarkdown
+        components={{
+          a: ({ href, children, ...props }) => (
+            <a {...props} href={href} target={href?.startsWith("http") ? "_blank" : undefined} rel={href?.startsWith("http") ? "noreferrer" : undefined}>
+              {children}
+            </a>
+          ),
+          img: ({ src, alt, ...props }) => (
+            <img {...props} alt={alt || ""} src={markdownImageSrc(src, sourcePath || "")} />
+          ),
+        }}
+      >
+        {markdown}
+      </ReactMarkdown>
+    </article>
+  );
 }
 
 function normalizeKeywords(value: string) {
@@ -254,6 +352,10 @@ function articlePlanToMarkdown(plan: NewsArticlePlan) {
     "",
     markdownList(plan.key_facts),
     "",
+    "## 有信息增量的评论正文洞察",
+    "",
+    markdownList(asArray(plan.valuable_comment_insights)),
+    "",
     "## 背景信息",
     "",
     markdownList(plan.background_context),
@@ -300,11 +402,59 @@ function articlePlanToMarkdown(plan: NewsArticlePlan) {
   ].join("\n");
 }
 
+function newsArticleQualityToMarkdown(article: NewsArticle, report: NewsArticleQualityReport | null) {
+  if (!report) return "";
+  const issues = asArray(report.issues);
+  return [
+    `# ${report.title || article.title || article.article_id || "AI 新闻文章质量评估"}`,
+    "",
+    `- Article ID: ${report.article_id || article.article_id || "-"}`,
+    `- 总分：${report.total_score != null ? Number(report.total_score).toFixed(1) : "-"}`,
+    `- 可发布：${report.publish_ready ? "是" : "否"}`,
+    "",
+    "## 摘要",
+    "",
+    report.summary || "-",
+    "",
+    "## 主要问题",
+    "",
+    issues.length
+      ? issues
+          .map((issue) =>
+            `- [${issue.severity || "-"}] ${issue.issue_type || "-"}：${issue.description || ""}${
+              issue.suggestion ? `\n  建议：${issue.suggestion}` : ""
+            }${issue.evidence ? `\n  证据：${issue.evidence}` : ""}`,
+          )
+          .join("\n")
+      : "- 未发现阻塞发布的问题。",
+    "",
+    "## 修改建议",
+    "",
+    markdownList(asArray(report.rewrite_recommendations)),
+    "",
+    "## 优点",
+    "",
+    markdownList(asArray(report.strengths)),
+  ].join("\n");
+}
+
 export function AINewsPage({ t }: AINewsPageProps) {
   const [news, setNews] = useState<NewsCollectionResult>(() => emptyNewsResult());
   const [scores, setScores] = useState<NewsScoringResult>(() => emptyScoringResult());
   const [events, setEvents] = useState<NewsEventResult>(() => emptyEventResult());
   const [articlePlan, setArticlePlan] = useState<NewsArticlePlan>(() => emptyArticlePlan());
+  const [newsArticles, setNewsArticles] = useState<NewsArticleListItem[]>([]);
+  const [selectedNewsArticleId, setSelectedNewsArticleId] = useState("");
+  const [newsArticle, setNewsArticle] = useState<NewsArticle>(() => emptyNewsArticle());
+  const [newsArticlePath, setNewsArticlePath] = useState("");
+  const [newsArticleReport, setNewsArticleReport] = useState("");
+  const [newsArticleReportPath, setNewsArticleReportPath] = useState("");
+  const [newsArticleReview, setNewsArticleReview] = useState<NewsArticleQualityReport | null>(null);
+  const [newsArticlePublish, setNewsArticlePublish] = useState("");
+  const [newsArticlePublishPath, setNewsArticlePublishPath] = useState("");
+  const [newsArticlePackage, setNewsArticlePackage] = useState("");
+  const [newsArticlePackagePath, setNewsArticlePackagePath] = useState("");
+  const [articlePreviewMode, setArticlePreviewMode] = useState<"article" | "report" | "publish" | "package">("article");
   const [digest, setDigest] = useState<NewsDigestArticle>(() => emptyDigestArticle());
   const [digestReview, setDigestReview] = useState<NewsDigestQualityReport | null>(null);
   const [digestPackage, setDigestPackage] = useState("");
@@ -321,6 +471,8 @@ export function AINewsPage({ t }: AINewsPageProps) {
   const [scoring, setScoring] = useState(false);
   const [buildingEvents, setBuildingEvents] = useState(false);
   const [planningArticle, setPlanningArticle] = useState(false);
+  const [writingArticle, setWritingArticle] = useState(false);
+  const [reviewingArticle, setReviewingArticle] = useState(false);
   const [writingDigest, setWritingDigest] = useState(false);
   const [reviewingDigest, setReviewingDigest] = useState(false);
   const [error, setError] = useState("");
@@ -338,6 +490,8 @@ export function AINewsPage({ t }: AINewsPageProps) {
   const [eventMinScore, setEventMinScore] = useState(60);
   const [similarityThreshold, setSimilarityThreshold] = useState(0.55);
   const [digestTop, setDigestTop] = useState(12);
+  const [articleReviewThreshold, setArticleReviewThreshold] = useState(80);
+  const [articlePolish, setArticlePolish] = useState(true);
   const [digestReviewThreshold, setDigestReviewThreshold] = useState(80);
   const [digestPolish, setDigestPolish] = useState(true);
   const [keywords, setKeywords] = useState("");
@@ -496,6 +650,96 @@ export function AINewsPage({ t }: AINewsPageProps) {
     }
   }, [t.news.articlePlanLoadFailed]);
 
+  const loadNewsArticles = useCallback(async () => {
+    try {
+      const payload = await fetchNewsArticles();
+      setNewsArticles(asArray(payload.articles));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setNewsArticles([]);
+      } else {
+        setError(err instanceof Error ? err.message : t.news.articleLoadFailed);
+      }
+    }
+  }, [t.news.articleLoadFailed]);
+
+  const loadNewsArticle = useCallback(async (articleId?: string) => {
+    const targetArticleId = articleId || selectedNewsArticleId;
+    const useSpecificArticle = Boolean(targetArticleId);
+    try {
+      const payload = useSpecificArticle ? await fetchNewsArticle(targetArticleId) : await fetchLatestNewsArticle();
+      let contentPayload: NewsReportContent = { content_markdown: payload.content_markdown || "", path: "" };
+      try {
+        contentPayload = useSpecificArticle
+          ? await fetchNewsArticleContent(targetArticleId)
+          : await fetchLatestNewsArticleContent();
+      } catch (contentErr) {
+        contentPayload = { content_markdown: payload.content_markdown || "", path: "" };
+      }
+      const normalizedArticle = normalizeNewsArticlePayload(payload, contentPayload.content_markdown || "");
+      const qualityReport = normalizedArticle.quality_report || null;
+      setNewsArticle(normalizedArticle);
+      setNewsArticleReview(qualityReport);
+      setSelectedNewsArticleId(normalizedArticle.article_id || targetArticleId || "");
+      setNewsArticlePath(contentPayload.path || "");
+      try {
+        const reportPayload = useSpecificArticle
+          ? await fetchNewsArticleReport(targetArticleId)
+          : await fetchLatestNewsArticleReport();
+        setNewsArticleReport(reportPayload.content_markdown || "");
+        setNewsArticleReportPath(reportPayload.path || "");
+      } catch (reportErr) {
+        setNewsArticleReport("");
+        setNewsArticleReportPath("");
+      }
+      try {
+        const reviewPayload = useSpecificArticle
+          ? await fetchNewsArticleReview(targetArticleId)
+          : await fetchLatestNewsArticleReview();
+        const review = reviewPayload.quality_report || (reviewPayload as unknown as NewsArticleQualityReport);
+        setNewsArticleReview(review && reviewPayload.exists !== false ? review : qualityReport);
+      } catch (reviewErr) {
+        if (reviewErr instanceof ApiError && reviewErr.status === 404) {
+          setNewsArticleReview(qualityReport);
+        }
+      }
+      try {
+        const publishPayload = useSpecificArticle
+          ? await fetchNewsArticlePublish(targetArticleId)
+          : await fetchLatestNewsArticlePublish();
+        setNewsArticlePublish(publishPayload.content_markdown || "");
+        setNewsArticlePublishPath(publishPayload.path || "");
+      } catch (publishErr) {
+        setNewsArticlePublish("");
+        setNewsArticlePublishPath("");
+      }
+      try {
+        const packagePayload = useSpecificArticle
+          ? await fetchNewsArticlePackage(targetArticleId)
+          : await fetchLatestNewsArticlePackage();
+        setNewsArticlePackage(packagePayload.content_markdown || "");
+        setNewsArticlePackagePath(packagePayload.path || "");
+      } catch (packageErr) {
+        setNewsArticlePackage("");
+        setNewsArticlePackagePath("");
+      }
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setNewsArticle(emptyNewsArticle());
+        setNewsArticlePath("");
+        setNewsArticleReport("");
+        setNewsArticleReportPath("");
+        setNewsArticleReview(null);
+        setNewsArticlePublish("");
+        setNewsArticlePublishPath("");
+        setNewsArticlePackage("");
+        setNewsArticlePackagePath("");
+      } else {
+        setError(err instanceof Error ? err.message : t.news.articleLoadFailed);
+      }
+    }
+  }, [selectedNewsArticleId, t.news.articleLoadFailed]);
+
   const loadDigest = useCallback(async () => {
     try {
       const [payload, contentPayload] = await Promise.all([fetchNewsDigest(), fetchNewsDigestContent()]);
@@ -561,6 +805,8 @@ export function AINewsPage({ t }: AINewsPageProps) {
       loadEvents(),
       loadEventReport(),
       loadArticlePlan(),
+      loadNewsArticles(),
+      loadNewsArticle(),
       loadDigest(),
       loadDigestReview(),
       loadDigestPackage(),
@@ -573,6 +819,8 @@ export function AINewsPage({ t }: AINewsPageProps) {
     loadEvents,
     loadEventReport,
     loadArticlePlan,
+    loadNewsArticles,
+    loadNewsArticle,
     loadDigest,
     loadDigestReview,
     loadDigestPackage,
@@ -663,6 +911,10 @@ export function AINewsPage({ t }: AINewsPageProps) {
     [filteredItems, scoreByNewsId],
   );
   const visibleNewsItems = activeTab === "recommended" ? recommendedItems : filteredItems;
+  const newsArticleQualityMarkdown = useMemo(
+    () => newsArticleQualityToMarkdown(newsArticle, newsArticleReview),
+    [newsArticle, newsArticleReview],
+  );
 
   const setFilter = (key: keyof NewsFilters, value: string) => {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -1009,6 +1261,98 @@ export function AINewsPage({ t }: AINewsPageProps) {
     flash(copied ? t.news.articlePlanJsonCopied : t.news.reportCopyFailed);
   };
 
+  const handleWriteNewsArticle = async () => {
+    if (!articlePlan.plan_id) {
+      flash(t.news.noArticleGeneratePlanFirst);
+      setActiveTab("articlePlan");
+      return;
+    }
+    setWritingArticle(true);
+    setError("");
+    try {
+      const payload = await writeNewsArticle({ plan_id: articlePlan.plan_id, use_latest: false });
+      const normalizedArticle = normalizeNewsArticlePayload(payload);
+      setNewsArticle(normalizedArticle);
+      setSelectedNewsArticleId(normalizedArticle.article_id || "");
+      await Promise.all([loadNewsArticles(), loadNewsArticle(normalizedArticle.article_id)]);
+      setArticlePreviewMode("article");
+      setActiveTab("article");
+      flash(t.news.articleGenerated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.news.articleFailed);
+    } finally {
+      setWritingArticle(false);
+    }
+  };
+
+  const handleReviewNewsArticle = async () => {
+    if (!newsArticle.article_id) {
+      flash(t.news.noArticle);
+      return;
+    }
+    setReviewingArticle(true);
+    setError("");
+    try {
+      const payload = await reviewNewsArticle({
+        article_id: newsArticle.article_id,
+        use_latest: false,
+        threshold: articleReviewThreshold,
+        polish: articlePolish,
+      });
+      const normalizedArticle = normalizeNewsArticlePayload(payload);
+      const qualityReport = normalizedArticle.quality_report || null;
+      setNewsArticle(normalizedArticle);
+      setNewsArticleReview(qualityReport);
+      await Promise.all([loadNewsArticles(), loadNewsArticle(normalizedArticle.article_id || newsArticle.article_id)]);
+      setArticlePreviewMode("publish");
+      setActiveTab("article");
+      flash(t.news.articleReviewSuccess);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.news.articleReviewFailed);
+    } finally {
+      setReviewingArticle(false);
+    }
+  };
+
+  const handleCopyNewsArticle = async () => {
+    const copied = newsArticle.content_markdown ? await copyText(newsArticle.content_markdown) : false;
+    flash(copied ? t.news.articleCopied : t.news.reportCopyFailed);
+  };
+
+  const handleCopyNewsArticlePublish = async () => {
+    const copied = newsArticlePublish ? await copyText(newsArticlePublish) : false;
+    flash(copied ? t.news.articlePublishCopied : t.news.reportCopyFailed);
+  };
+
+  const handleCopyNewsArticlePackage = async () => {
+    const copied = newsArticlePackage ? await copyText(newsArticlePackage) : false;
+    flash(copied ? t.news.articlePackageCopied : t.news.reportCopyFailed);
+  };
+
+  const handleDownloadNewsArticle = () => {
+    if (!newsArticle.content_markdown) {
+      flash(t.news.reportCopyFailed);
+      return;
+    }
+    downloadMarkdown(newsArticle.title || newsArticle.article_id || "news_article", newsArticle.content_markdown);
+  };
+
+  const handleDownloadNewsArticlePublish = () => {
+    if (!newsArticlePublish) {
+      flash(t.news.reportCopyFailed);
+      return;
+    }
+    downloadMarkdown(`${newsArticle.article_id || "news_article"}_publish`, newsArticlePublish);
+  };
+
+  const handleDownloadNewsArticlePackage = () => {
+    if (!newsArticlePackage) {
+      flash(t.news.reportCopyFailed);
+      return;
+    }
+    downloadMarkdown(`${newsArticle.article_id || "news_article"}_package`, newsArticlePackage);
+  };
+
   return (
     <div className="page-stack ai-news-page">
       <section className="panel page-panel">
@@ -1248,6 +1592,59 @@ export function AINewsPage({ t }: AINewsPageProps) {
 
       <section className="panel page-panel">
         <div className="panel-header">
+          <h2>{t.news.articleWritingControls}</h2>
+          <div className="button-row">
+            <button className="secondary-button" type="button" onClick={() => void handleReviewNewsArticle()} disabled={reviewingArticle || !newsArticle.article_id}>
+              <Sparkles className={reviewingArticle ? "spin-icon" : ""} size={17} aria-hidden="true" />
+              <span>{reviewingArticle ? t.news.reviewingArticle : t.news.reviewArticle}</span>
+            </button>
+            <button className="primary-button" type="button" onClick={() => void handleWriteNewsArticle()} disabled={writingArticle || !articlePlan.plan_id}>
+              <FileText className={writingArticle ? "spin-icon" : ""} size={17} aria-hidden="true" />
+              <span>{writingArticle ? t.news.articleGenerating : t.news.generateArticle}</span>
+            </button>
+          </div>
+        </div>
+        <div className="news-control-grid">
+          <label>
+            <span>{t.news.publishThreshold}</span>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={articleReviewThreshold}
+              onChange={(event) => setArticleReviewThreshold(Number(event.target.value) || 80)}
+            />
+          </label>
+          <label className="checkbox-setting news-checkbox">
+            <span>{t.news.polishArticle}</span>
+            <input type="checkbox" checked={articlePolish} onChange={(event) => setArticlePolish(event.target.checked)} />
+          </label>
+          <div className="news-score-status">
+            <span>{t.news.articlePlan}</span>
+            <strong>{articlePlan.plan_id ? articlePlan.generation_mode || "-" : t.news.notReviewed}</strong>
+          </div>
+          <div className="news-score-status">
+            <span>{t.news.wechatArticle}</span>
+            <strong>{newsArticle.article_id ? newsArticle.generation_mode || "-" : "-"}</strong>
+          </div>
+          <div className="news-score-status">
+            <span>{t.labels.words}</span>
+            <strong>{newsArticle.word_count || 0}</strong>
+          </div>
+          <div className="news-score-status">
+            <span>{t.news.publishStatus}</span>
+            <strong>{newsArticleReview ? (newsArticleReview.publish_ready ? t.news.publishReady : t.news.needsRevision) : t.news.notReviewed}</strong>
+          </div>
+          <div className="news-score-status">
+            <span>{t.news.qualityScore}</span>
+            <strong>{newsArticleReview?.total_score != null ? Number(newsArticleReview.total_score).toFixed(1) : t.news.notReviewed}</strong>
+          </div>
+        </div>
+        {!articlePlan.plan_id ? <p className="empty-state">{t.news.noArticleGeneratePlanFirst}</p> : null}
+      </section>
+
+      <section className="panel page-panel">
+        <div className="panel-header">
           <h2>{t.news.digestControls}</h2>
           <div className="button-row">
             <button className="secondary-button" type="button" onClick={handleReviewDigest} disabled={reviewingDigest || !digest.content_markdown}>
@@ -1426,6 +1823,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
           ["recommended", t.news.recommendedNews],
           ["events", t.news.eventCard],
           ["articlePlan", t.news.articlePlan],
+          ["article", t.news.wechatArticle],
           ["digest", t.news.aiDigest],
           ["collectionReport", t.news.collectionReport],
           ["scoreReport", t.news.scoreReport],
@@ -1621,6 +2019,10 @@ export function AINewsPage({ t }: AINewsPageProps) {
               <Sparkles className={planningArticle ? "spin-icon" : ""} size={16} aria-hidden="true" />
               <span>{planningArticle ? t.news.articlePlanGenerating : t.news.generateArticlePlan}</span>
             </button>
+            <button className="primary-button" type="button" onClick={() => void handleWriteNewsArticle()} disabled={writingArticle || !articlePlan.plan_id}>
+              <FileText className={writingArticle ? "spin-icon" : ""} size={16} aria-hidden="true" />
+              <span>{writingArticle ? t.news.articleGenerating : t.news.generateArticle}</span>
+            </button>
           </div>
         </div>
 
@@ -1792,6 +2194,10 @@ export function AINewsPage({ t }: AINewsPageProps) {
               <Clipboard size={16} aria-hidden="true" />
               <span>{t.news.copyArticlePlanJson}</span>
             </button>
+            <button className="primary-button" type="button" onClick={() => void handleWriteNewsArticle()} disabled={!articlePlan.plan_id || writingArticle}>
+              <FileText className={writingArticle ? "spin-icon" : ""} size={16} aria-hidden="true" />
+              <span>{writingArticle ? t.news.articleGenerating : t.news.generateArticle}</span>
+            </button>
           </div>
         </div>
         {articlePlan.plan_id ? (
@@ -1834,6 +2240,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
               {[
                 [t.news.titleCandidates, articlePlan.title_candidates],
                 [t.news.keyFacts, articlePlan.key_facts],
+                ["有信息增量的评论正文洞察", articlePlan.valuable_comment_insights],
                 [t.news.backgroundContext, articlePlan.background_context],
                 [t.news.whyItMatters, articlePlan.why_it_matters],
                 [t.news.readerTakeaways, articlePlan.reader_takeaways],
@@ -1881,6 +2288,278 @@ export function AINewsPage({ t }: AINewsPageProps) {
           <p className="empty-state">{t.news.noArticlePlan}</p>
         )}
       </section>
+      ) : null}
+
+      {activeTab === "article" ? (
+      <div className="news-article-layout">
+      <section className="panel page-panel news-article-list-panel">
+        <div className="panel-header compact-header">
+          <div>
+            <h2>{t.news.articleHistory}</h2>
+            <p>{`${newsArticles.length} ${t.news.wechatArticle}`}</p>
+          </div>
+          <button className="secondary-button" type="button" onClick={() => void loadNewsArticles()}>
+            <RefreshCw size={16} aria-hidden="true" />
+            <span>{t.actions.refresh}</span>
+          </button>
+        </div>
+        {newsArticles.length ? (
+          <div className="news-article-history-list">
+            {newsArticles.map((article) => {
+              const isActive = (selectedNewsArticleId || newsArticle.article_id) === article.article_id;
+              const coverUrl = validRemoteImageUrl(article.cover_image_url) ? article.cover_image_url || "" : "";
+              return (
+                <button
+                  className={`news-article-history-item ${isActive ? "selected" : ""}`}
+                  key={article.article_id}
+                  type="button"
+                  onClick={() => void loadNewsArticle(article.article_id)}
+                >
+                  <span className="news-article-thumb" aria-hidden="true">
+                    {coverUrl ? <img src={coverUrl} alt={article.cover_image_alt || ""} loading="lazy" /> : <span>{t.news.noCover}</span>}
+                  </span>
+                  <span className="news-article-history-main">
+                    <strong>{article.title || article.article_id}</strong>
+                    <span>{formatDate(article.generated_at)}</span>
+                    <span className="news-article-history-badges">
+                      <em>{`${t.news.qualityScore}: ${
+                        article.quality_score != null ? Number(article.quality_score).toFixed(1) : t.news.notReviewed
+                      }`}</em>
+                      <em>{article.quality_publish_ready ? t.news.publishReady : t.news.needsRevision}</em>
+                      {article.publish_polished ? <em>{t.news.publishPolished}</em> : null}
+                      {article.package_available ? <em>{t.news.packagePreview}</em> : null}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="empty-state">{t.news.noArticleHistory}</p>
+        )}
+      </section>
+
+      <section className="panel page-panel news-article-preview-panel">
+        <div className="panel-header">
+          <div>
+            <h2>{t.news.wechatArticle}</h2>
+            {newsArticlePath || newsArticleReportPath || newsArticlePublishPath || newsArticlePackagePath ? (
+              <p className="muted-line">
+                {articlePreviewMode === "report"
+                  ? newsArticleReportPath
+                  : articlePreviewMode === "publish"
+                    ? newsArticlePublishPath
+                    : articlePreviewMode === "package"
+                      ? newsArticlePackagePath
+                      : newsArticlePath}
+              </p>
+            ) : null}
+          </div>
+          <div className="button-row">
+            <button className="secondary-button" type="button" onClick={() => void handleCopyNewsArticle()} disabled={!newsArticle.content_markdown}>
+              <Clipboard size={16} aria-hidden="true" />
+              <span>{t.news.copyArticle}</span>
+            </button>
+            <button className="secondary-button" type="button" onClick={handleDownloadNewsArticle} disabled={!newsArticle.content_markdown}>
+              <Download size={16} aria-hidden="true" />
+              <span>{t.news.downloadArticle}</span>
+            </button>
+            <button className="secondary-button" type="button" onClick={() => void handleCopyNewsArticlePublish()} disabled={!newsArticlePublish}>
+              <Clipboard size={16} aria-hidden="true" />
+              <span>{t.news.copyPublishArticle}</span>
+            </button>
+            <button className="secondary-button" type="button" onClick={handleDownloadNewsArticlePublish} disabled={!newsArticlePublish}>
+              <Download size={16} aria-hidden="true" />
+              <span>{t.news.downloadPublishArticle}</span>
+            </button>
+            <button className="secondary-button" type="button" onClick={() => void handleCopyNewsArticlePackage()} disabled={!newsArticlePackage}>
+              <Clipboard size={16} aria-hidden="true" />
+              <span>{t.news.copyPackage}</span>
+            </button>
+            <button className="secondary-button" type="button" onClick={handleDownloadNewsArticlePackage} disabled={!newsArticlePackage}>
+              <Download size={16} aria-hidden="true" />
+              <span>{t.news.downloadPackage}</span>
+            </button>
+            <button className="secondary-button" type="button" onClick={() => setArticlePreviewMode("report")} disabled={!newsArticleReport && !newsArticleQualityMarkdown}>
+              <FileText size={16} aria-hidden="true" />
+              <span>{t.news.viewReport}</span>
+            </button>
+            <button className="secondary-button" type="button" onClick={() => void handleReviewNewsArticle()} disabled={!newsArticle.article_id || reviewingArticle}>
+              <Sparkles className={reviewingArticle ? "spin-icon" : ""} size={16} aria-hidden="true" />
+              <span>{reviewingArticle ? t.news.reviewingArticle : t.news.reviewArticle}</span>
+            </button>
+            <button className="primary-button" type="button" onClick={() => void handleWriteNewsArticle()} disabled={!articlePlan.plan_id || writingArticle}>
+              <RefreshCw className={writingArticle ? "spin-icon" : ""} size={16} aria-hidden="true" />
+              <span>{writingArticle ? t.news.articleGenerating : t.news.regenerateArticle}</span>
+            </button>
+          </div>
+        </div>
+        {newsArticle.article_id ? (
+          <>
+            <div className="article-preview-title-block">
+              <h3>{newsArticle.title || "-"}</h3>
+              {newsArticle.subtitle ? <p>{newsArticle.subtitle}</p> : null}
+            </div>
+            <div className="news-article-cover-panel">
+              {validRemoteImageUrl(newsArticle.cover_image_url) ? (
+                <>
+                  <img src={newsArticle.cover_image_url || ""} alt={newsArticle.cover_image_alt || t.news.coverImage} />
+                  <div>
+                    <span className="soft-badge running">{newsArticle.cover_image_status || "selected"}</span>
+                    <p>{newsArticle.cover_image_alt || t.news.coverImage}</p>
+                    <a href={newsArticle.cover_image_url || ""} target="_blank" rel="noreferrer">
+                      {newsArticle.cover_image_url}
+                    </a>
+                    {newsArticle.cover_image_source_url ? (
+                      <a href={newsArticle.cover_image_source_url} target="_blank" rel="noreferrer">
+                        {`${t.news.coverSource}: ${newsArticle.cover_image_source_url}`}
+                      </a>
+                    ) : null}
+                  </div>
+                </>
+              ) : (
+                <div className="news-article-cover-empty">
+                  <span>{t.news.noCover}</span>
+                  <p>{`${t.news.coverStatus}: ${newsArticle.cover_image_status || "missing"}`}</p>
+                </div>
+              )}
+            </div>
+            <div className="news-digest-meta">
+              <span className="soft-badge unknown">{`${t.news.generationMode}: ${newsArticle.generation_mode || "-"}`}</span>
+              <span className="soft-badge unknown">{`${t.labels.words}: ${newsArticle.word_count || 0}`}</span>
+              <span className="soft-badge unknown">{`${t.news.fullTextSourceCount}: ${newsArticle.used_full_text_count || 0}`}</span>
+              <span className="soft-badge unknown">{`${t.news.summarySourceCount}: ${newsArticle.used_summary_only_count || 0}`}</span>
+              <span className={`soft-badge ${newsArticleReview?.publish_ready ? "running" : "pending"}`}>
+                {newsArticleReview ? (newsArticleReview.publish_ready ? t.news.publishReady : t.news.needsRevision) : t.news.notReviewed}
+              </span>
+              <span className="soft-badge unknown">
+                {`${t.news.qualityScore}: ${newsArticleReview?.total_score != null ? Number(newsArticleReview.total_score).toFixed(1) : t.news.notReviewed}`}
+              </span>
+              <span className="soft-badge unknown">
+                {`${t.news.structureNaturalness}: ${
+                  newsArticleReview?.structure_naturalness_score != null
+                    ? Number(newsArticleReview.structure_naturalness_score).toFixed(1)
+                    : t.news.notReviewed
+                }`}
+              </span>
+              {newsArticle.publish_polished ? <span className="soft-badge running">{t.news.publishPolished}</span> : null}
+            </div>
+            {asArray(newsArticle.warnings).length ? (
+              <details className="banner warning news-warning article-plan-warning" open>
+                <summary>{`${t.labels.warnings} (${asArray(newsArticle.warnings).length})`}</summary>
+                <ul>
+                  {asArray(newsArticle.warnings).map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+            {newsArticleReview ? (
+              <div className="news-digest-quality-grid">
+                <div className="news-quality-summary">
+                  <span>{t.news.newsArticleQuality}</span>
+                  <strong>{newsArticleReview.total_score != null ? Number(newsArticleReview.total_score).toFixed(1) : "-"}</strong>
+                  <em>{newsArticleReview.publish_ready ? t.news.publishReady : t.news.needsRevision}</em>
+                </div>
+                <div className="news-quality-detail">
+                  <p>{newsArticleReview.summary || ""}</p>
+                  <p className="muted-line">
+                    {`${t.news.structureNaturalness}: ${
+                      newsArticleReview.structure_naturalness_score != null
+                        ? Number(newsArticleReview.structure_naturalness_score).toFixed(1)
+                        : "-"
+                    }`}
+                  </p>
+                  {asArray(newsArticleReview.issues).length ? (
+                    <>
+                      <h3>{t.news.majorIssues}</h3>
+                      <ul className="news-score-reasons">
+                        {asArray(newsArticleReview.issues).slice(0, 5).map((issue) => (
+                          <li key={`${issue.issue_type}:${issue.description}`}>
+                            <strong>{`[${issue.severity || "-"}] ${issue.issue_type || "-"}`}</strong>
+                            {`: ${issue.description || ""}`}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : (
+                    <p className="muted-line">{t.news.noMajorIssues}</p>
+                  )}
+                  {asArray(newsArticleReview.rewrite_recommendations).length ? (
+                    <>
+                      <h3>{t.news.rewriteRecommendations}</h3>
+                      <ul className="news-score-reasons">
+                        {asArray(newsArticleReview.rewrite_recommendations).slice(0, 5).map((recommendation) => (
+                          <li key={recommendation}>{recommendation}</li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <p className="empty-state">{t.news.noArticleReview}</p>
+            )}
+            {newsArticleReview && !newsArticleReview.publish_ready ? (
+              <div className="banner warning">{t.news.articleQualityRisk}</div>
+            ) : null}
+            <div className="article-preview-switch" role="tablist" aria-label={t.news.wechatArticle}>
+              <button
+                className={articlePreviewMode === "article" ? "active" : ""}
+                type="button"
+                onClick={() => setArticlePreviewMode("article")}
+              >
+                {t.news.wechatArticle}
+              </button>
+              <button
+                className={articlePreviewMode === "report" ? "active" : ""}
+                type="button"
+                onClick={() => setArticlePreviewMode("report")}
+              >
+                {t.news.reportPreview}
+              </button>
+              <button
+                className={articlePreviewMode === "publish" ? "active" : ""}
+                type="button"
+                onClick={() => setArticlePreviewMode("publish")}
+              >
+                {t.news.publishArticle}
+              </button>
+              <button
+                className={articlePreviewMode === "package" ? "active" : ""}
+                type="button"
+                onClick={() => setArticlePreviewMode("package")}
+              >
+                {t.news.packagePreview}
+              </button>
+            </div>
+            {articlePreviewMode === "report" ? (
+              newsArticleQualityMarkdown || newsArticleReport ? (
+                <MarkdownPreview markdown={newsArticleQualityMarkdown || newsArticleReport} sourcePath={newsArticleQualityMarkdown ? "" : newsArticleReportPath} long />
+              ) : (
+                <p className="empty-state">{t.news.noArticleReport}</p>
+              )
+            ) : articlePreviewMode === "publish" ? (
+              newsArticlePublish ? (
+                <MarkdownPreview markdown={newsArticlePublish} sourcePath={newsArticlePublishPath} long />
+              ) : (
+                <p className="empty-state">{newsArticleReview ? t.news.noArticlePublish : t.news.reviewArticleFirst}</p>
+              )
+            ) : articlePreviewMode === "package" ? (
+              newsArticlePackage ? (
+                <MarkdownPreview markdown={newsArticlePackage} sourcePath={newsArticlePackagePath} long />
+              ) : (
+                <p className="empty-state">{newsArticleReview ? t.news.noArticlePackage : t.news.reviewArticleFirst}</p>
+              )
+            ) : (
+              <MarkdownPreview markdown={newsArticle.content_markdown} sourcePath={newsArticlePath} long />
+            )}
+          </>
+        ) : (
+          <p className="empty-state">{t.news.noArticle}</p>
+        )}
+      </section>
+      </div>
       ) : null}
 
       {activeTab === "digest" ? (
@@ -1975,12 +2654,12 @@ export function AINewsPage({ t }: AINewsPageProps) {
                 </div>
               </div>
               {digestPackage ? (
-                <pre className="prompt-block news-report-preview">{digestPackage}</pre>
+                <MarkdownPreview markdown={digestPackage} sourcePath={digestPackagePath} />
               ) : (
                 <p className="empty-state">{digestReview ? t.news.noDigestPackage : t.news.reviewFirstForPackage}</p>
               )}
             </div>
-            <pre className="prompt-block news-report-preview">{digest.content_markdown}</pre>
+            <MarkdownPreview markdown={digest.content_markdown} sourcePath={digestPath} />
           </>
         ) : (
           <p className="empty-state">{t.news.noDigest}</p>
@@ -2002,7 +2681,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
         </div>
         {reportError ? <div className="banner error">{reportError}</div> : null}
         {report ? (
-          <pre className="prompt-block news-report-preview">{report}</pre>
+          <MarkdownPreview markdown={report} sourcePath={reportPath} />
         ) : (
           <p className="empty-state">{t.news.noReport}</p>
         )}
@@ -2023,7 +2702,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
         </div>
         {reportError ? <div className="banner error">{reportError}</div> : null}
         {scoreReport ? (
-          <pre className="prompt-block news-report-preview">{scoreReport}</pre>
+          <MarkdownPreview markdown={scoreReport} sourcePath={scoreReportPath} />
         ) : (
           <p className="empty-state">{t.news.noScoreReport}</p>
         )}
@@ -2044,7 +2723,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
         </div>
         {reportError ? <div className="banner error">{reportError}</div> : null}
         {eventReport ? (
-          <pre className="prompt-block news-report-preview">{eventReport}</pre>
+          <MarkdownPreview markdown={eventReport} sourcePath={eventReportPath} />
         ) : (
           <p className="empty-state">{t.news.noEventReport}</p>
         )}

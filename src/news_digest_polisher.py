@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config import get_settings
+from src.interaction_metrics import strip_interaction_metric_text
 from src.llm_service import LLMService
 from src.models import NewsDigestArticle, NewsDigestQualityReport
 
@@ -184,6 +185,7 @@ class NewsDigestPolisherService:
         content = self._move_supplemental_links(content)
         content = self._format_link_blocks(content)
         content = self._normalize_repeated_starts(content)
+        content = strip_interaction_metric_text(content)
         content = re.sub(r"\n{3,}", "\n\n", content)
         content = re.sub(r"[ \t]+\n", "\n", content)
         content = re.sub(r"([。！？])\s+([^\n#>-])", r"\1\n\n\2", content)
@@ -273,6 +275,7 @@ class NewsDigestPolisherService:
             system_prompt=(
                 "你是中文 AI 新闻日报发布编辑。只做轻量润色，不改事实、不新增未给出的事实。"
                 "必须保留原有 Markdown 栏目结构、所有原文 URL、标题层级和每条新闻对应链接。"
+                "删除点赞数、评论数、points、comments、评论区炸了、很多人讨论、大家都在讨论、开发者普遍认为等互动数量或无支撑社区共识表述。"
                 "降低报告腔，补强为什么值得关注，但不要把链接集中到文末。"
                 "输出严格 JSON：content_markdown、notes。"
             ),

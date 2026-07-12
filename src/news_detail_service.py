@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin, urlparse
 
 import requests
 
 from src.config import get_settings
-from src.models import NewsDetailResult, NewsItem
+from src.models import NewsDetailResult, NewsImageCandidate, NewsItem
 from src.news_collector import _clean_text, utc_now_iso
 
 
@@ -38,6 +40,79 @@ def _word_count(text: str | None) -> int:
     if not text:
         return 0
     return len(re.findall(r"\w+", text, flags=re.UNICODE))
+
+
+def _is_http_url(value: str | None) -> bool:
+    try:
+        parsed = urlparse(str(value or "").strip())
+    except ValueError:
+        return False
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _clean_url(value: str | None, base_url: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    resolved = urljoin(base_url, raw)
+    return resolved if _is_http_url(resolved) else ""
+
+
+class _ImageCandidateParser(HTMLParser):
+    META_KEYS = {
+        "og:image",
+        "og:image:url",
+        "og:image:secure_url",
+        "twitter:image",
+        "twitter:image:src",
+    }
+
+    def __init__(self, base_url: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.candidates: list[NewsImageCandidate] = []
+        self._seen: set[str] = set()
+        self._meta_alt: dict[str, str] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_map = {key.lower(): (value or "").strip() for key, value in attrs if key}
+        tag_lower = tag.lower()
+        if tag_lower == "meta":
+            key = (attr_map.get("property") or attr_map.get("name") or "").lower()
+            content = attr_map.get("content") or ""
+            if key in {"og:image:alt", "twitter:image:alt"} and content:
+                self._meta_alt[key.split(":")[0]] = content
+                return
+            if key in self.META_KEYS:
+                source_type = "twitter:image" if key.startswith("twitter") else "og:image"
+                self._add(content, source_type=source_type, alt=self._meta_alt.get("twitter" if key.startswith("twitter") else "og"))
+            return
+        if tag_lower == "link":
+            rel = attr_map.get("rel", "").lower()
+            if "image_src" in rel or "preload" in rel and attr_map.get("as", "").lower() == "image":
+                self._add(attr_map.get("href") or "", source_type="link:image_src", alt=None)
+            return
+        if tag_lower == "img":
+            src = attr_map.get("src") or attr_map.get("data-src") or attr_map.get("data-original") or ""
+            alt = attr_map.get("alt") or attr_map.get("title") or None
+            self._add(src, source_type="body:first_image", alt=alt)
+
+    def _add(self, value: str, source_type: str, alt: str | None) -> None:
+        url = _clean_url(value, self.base_url)
+        if not url:
+            return
+        key = url.casefold()
+        if key in self._seen:
+            return
+        self._seen.add(key)
+        self.candidates.append(
+            NewsImageCandidate(
+                url=url,
+                source_url=self.base_url,
+                alt=(alt or "").strip() or None,
+                source_type=source_type,
+            )
+        )
 
 
 class NewsDetailService:
@@ -70,8 +145,8 @@ class NewsDetailService:
             try:
                 payload = json.loads(cache_path.read_text(encoding="utf-8"))
                 detail = _model_validate(NewsDetailResult, payload)
-                if detail.content_text:
-                    return self._from_item(item, "cached", None, detail.content_text)
+                if detail.content_text or detail.cover_image_url or detail.image_candidates:
+                    return detail
                 return self._from_item(
                     item,
                     detail.extraction_status or "failed",
@@ -88,6 +163,7 @@ class NewsDetailService:
 
         extraction_error: str | None = None
         extracted_text: str | None = None
+        image_candidates: list[NewsImageCandidate] = []
         extraction_status = "skipped"
         if not item.url:
             extraction_error = "Missing article URL."
@@ -95,11 +171,18 @@ class NewsDetailService:
         elif trafilatura is None:
             extraction_error = "trafilatura is not installed."
             extraction_status = "failed"
+            try:
+                response = self.session.get(item.url, timeout=self.request_timeout)
+                response.raise_for_status()
+                image_candidates = self._extract_image_candidates(response.text, item.url)
+            except requests.RequestException as exc:
+                extraction_error = f"{extraction_error} Image metadata fetch failed: {type(exc).__name__}: {exc}"
         else:
             extraction_status = "failed"
             try:
                 response = self.session.get(item.url, timeout=self.request_timeout)
                 response.raise_for_status()
+                image_candidates = self._extract_image_candidates(response.text, item.url)
                 extracted = trafilatura.extract(
                     response.text,
                     url=item.url,
@@ -122,6 +205,7 @@ class NewsDetailService:
             extraction_status=extraction_status,
             extraction_error=extraction_error,
             content_text=extracted_text or item.content_text,
+            image_candidates=image_candidates,
         )
         self._save_cache(detail)
         if extraction_status == "refreshed" and extracted_text:
@@ -167,6 +251,7 @@ class NewsDetailService:
         extraction_status: str,
         extraction_error: str | None,
         content_text: str | None,
+        image_candidates: list[NewsImageCandidate] | None = None,
     ) -> NewsDetailResult:
         text = (content_text or "").strip() or None
         summary_text = (item.summary_zh or item.summary or "").strip()
@@ -180,6 +265,8 @@ class NewsDetailService:
             availability = "metadata_only"
             preview = ""
 
+        candidates = self._dedupe_image_candidates(image_candidates or [])
+        cover = candidates[0] if candidates else None
         return NewsDetailResult(
             news_id=item.id,
             title=item.title or "",
@@ -199,7 +286,43 @@ class NewsDetailService:
             extraction_error=extraction_error,
             word_count=_word_count(text),
             original_language=item.language,
+            cover_image_url=cover.url if cover else None,
+            cover_image_source_url=cover.source_url if cover else None,
+            cover_image_alt=cover.alt if cover else None,
+            cover_image_status="found" if cover else "missing",
+            image_candidates=candidates,
         )
+
+    def _extract_image_candidates(self, html: str, base_url: str) -> list[NewsImageCandidate]:
+        if not html or not base_url:
+            return []
+        parser = _ImageCandidateParser(base_url)
+        try:
+            parser.feed(html[:1_000_000])
+        except Exception:
+            return parser.candidates
+        return self._dedupe_image_candidates(parser.candidates)
+
+    def _dedupe_image_candidates(self, candidates: list[NewsImageCandidate]) -> list[NewsImageCandidate]:
+        seen: set[str] = set()
+        cleaned: list[NewsImageCandidate] = []
+        for candidate in candidates:
+            url = _clean_url(candidate.url, candidate.source_url or "")
+            if not url:
+                continue
+            key = url.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(
+                NewsImageCandidate(
+                    url=url,
+                    source_url=candidate.source_url or url,
+                    alt=(candidate.alt or "").strip() or None,
+                    source_type=candidate.source_type or "unknown",
+                )
+            )
+        return cleaned
 
     def _save_cache(self, detail: NewsDetailResult) -> None:
         self.articles_dir.mkdir(parents=True, exist_ok=True)

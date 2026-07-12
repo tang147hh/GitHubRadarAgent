@@ -7,9 +7,14 @@ import type {
   FinalArticleContent,
   FinalArticleItem,
   JobStatus,
+  NewsArticle,
+  NewsArticleListResponse,
+  NewsArticleQualityReport,
   LatestRunResponse,
   NewsArticlePlan,
   NewsArticlePlanRequest,
+  NewsArticleReviewRequest,
+  NewsArticleWriteRequest,
   NewsCollectRequest,
   NewsCollectionResult,
   NewsDetailResult,
@@ -134,6 +139,34 @@ export const createNewsArticlePlan = (request: NewsArticlePlanRequest) =>
 export const fetchLatestNewsArticlePlan = () => getJson<NewsArticlePlan>("/api/news/article-plan/latest");
 export const fetchNewsArticlePlan = (planId: string) =>
   getJson<NewsArticlePlan>(`/api/news/article-plan/${encodeURIComponent(planId)}`);
+export const writeNewsArticle = (request: NewsArticleWriteRequest) =>
+  postJson<NewsArticle>("/api/news/article/write", request);
+export const reviewNewsArticle = (request: NewsArticleReviewRequest) =>
+  postJson<NewsArticle>("/api/news/article/review", request);
+export const fetchLatestNewsArticle = () => getJson<NewsArticle>("/api/news/article/latest");
+export const fetchLatestNewsArticleContent = () => getJson<NewsReportContent>("/api/news/article/latest/content");
+export const fetchLatestNewsArticleReport = () => getJson<NewsReportContent>("/api/news/article/latest/report");
+export const fetchLatestNewsArticleReview = () =>
+  getJson<(NewsArticleQualityReport & { exists?: boolean; quality_report?: NewsArticleQualityReport | null; message?: string })>(
+    "/api/news/article/review/latest",
+  );
+export const fetchLatestNewsArticlePublish = () => getJson<NewsReportContent>("/api/news/article/latest/publish");
+export const fetchLatestNewsArticlePackage = () => getJson<NewsReportContent>("/api/news/article/latest/package");
+export const fetchNewsArticles = () => getJson<NewsArticleListResponse>("/api/news/articles");
+export const fetchNewsArticle = (articleId: string) =>
+  getJson<NewsArticle>(`/api/news/article/${encodeURIComponent(articleId)}`);
+export const fetchNewsArticleContent = (articleId: string) =>
+  getJson<NewsReportContent>(`/api/news/article/${encodeURIComponent(articleId)}/content`);
+export const fetchNewsArticleReport = (articleId: string) =>
+  getJson<NewsReportContent>(`/api/news/article/${encodeURIComponent(articleId)}/report`);
+export const fetchNewsArticleReview = (articleId: string) =>
+  getJson<(NewsArticleQualityReport & { exists?: boolean; quality_report?: NewsArticleQualityReport | null; message?: string })>(
+    `/api/news/article/${encodeURIComponent(articleId)}/review`,
+  );
+export const fetchNewsArticlePublish = (articleId: string) =>
+  getJson<NewsReportContent>(`/api/news/article/${encodeURIComponent(articleId)}/publish`);
+export const fetchNewsArticlePackage = (articleId: string) =>
+  getJson<NewsReportContent>(`/api/news/article/${encodeURIComponent(articleId)}/package`);
 export const fetchNewsScores = () => getJson<NewsScoringResult>("/api/news/scores");
 export const scoreNews = (request: NewsScoreRequest) => postJson<NewsScoringResult>("/api/news/score", request);
 export const fetchNewsScoresReport = () => getJson<NewsReportContent>("/api/news/scores/report");

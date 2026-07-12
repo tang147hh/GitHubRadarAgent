@@ -102,6 +102,8 @@ python3 main.py collect-news --hours 24 --limit 100 --translate
 python3 main.py fetch-news-detail --news-id <news_id> --refresh
 python3 main.py select-news --news-id <news_id> --news-id <news_id> --primary-news-id <news_id> --direction "从开发者采用成本角度写"
 python3 main.py plan-news-article --latest
+python3 main.py write-news-article --latest
+python3 main.py review-news-article --threshold 80 --polish
 python3 main.py score-news --top 20 --min-score 60
 python3 main.py build-news-events --top 20 --min-score 60 --similarity-threshold 0.55
 python3 main.py write-news-digest --top 12
@@ -113,9 +115,44 @@ python3 main.py schedule --time 09:00 --run-once-first
 
 `articles` 是 `write-articles` 的兼容别名。`write --repo owner/name` 仍是早期占位命令，不属于当前日报主流程。
 
+### Agent Tools
+
+项目内的 `skills/github-project-article` 和 `skills/ai-news-article` 描述了 Agent 可选择的内容生产 skill；Agent Tools 是 skill 到实际本地能力之间的中间层，把现有 CLI / service 能力注册成统一的 `ToolRegistry`。本步骤只支持工具注册、本地同步调用和调用结果落盘，还没有 Supervisor Planner，也没有自动选择 skill 的 LLM Planner。
+
+查看工具：
+
+```bash
+python3 main.py agent-tools list
+python3 main.py agent-tools list --skill github-project-article
+python3 main.py agent-tools list --skill ai-news-article
+```
+
+调用工具：
+
+```bash
+python3 main.py agent-tools call news.collect --args-json '{"hours":24,"limit":20,"translate":true,"translate_limit":20}'
+python3 main.py agent-tools call github.write_custom_article --args-json '{"repo_url":"https://github.com/sharkdp/bat","direction_text":"从程序员日常使用体验写"}'
+```
+
+每次调用都会生成统一的 `AgentToolResult`，并保存：
+
+```text
+workspace/agent_tool_calls/{call_id}.json
+workspace/agent_tool_calls/latest_tool_call.json
+```
+
+已注册的 GitHub 项目文章工具包括 `github.discover_projects`、`github.score_projects`、`github.select_projects`、`github.research_selected`、`github.plan_content`、`github.write_articles`、`github.review_articles`、`github.package_articles`、`github.write_custom_article`。已注册的 AI 新闻文章工具包括 `news.collect`、`news.score`、`news.build_events`、`news.fetch_detail`、`news.select`、`news.plan_article`、`news.write_article`、`news.review_article`、`news.write_digest`、`news.review_digest`。
+
+本地 API 也提供同步调用入口：
+
+```text
+GET /api/agent/tools
+POST /api/agent/tools/call
+```
+
 ### AI 新闻采集
 
-`collect-news` 只做新闻源接入、数据标准化、去重、日期新鲜度检测、标题/摘要中文翻译和采集报告生成；`fetch-news-detail` 会按单条 `news_id` 读取新闻详情，并用 trafilatura 尽力提取原文正文；`select-news` 保存 1-5 条新闻和主新闻；`plan-news-article` 根据已保存选题生成公众号文章策划稿，但不生成最终文章；`score-news` 在采集结果基础上做新闻分类、重要性评分、入选理由和推荐栏目选择；`build-news-events` 会把多条新闻合并成事件卡片，去掉重复报道、保留多来源证据；`write-news-digest` 会基于事件卡片生成中文“今日 AI 圈新闻日报”；`review-news-digest` 会做日报质量评估、轻量去 AI 味、发布状态判断和发布包生成。默认会采集官方 RSS、Hacker News Algolia、arXiv 和 GDELT；如果配置了 `RSSHUB_BASE_URL`，也可以通过 `--source rsshub` 或默认源集合启用 RSSHub 路由。本步骤仍不接公众号 API，不做自动定时发布。
+`collect-news` 只做新闻源接入、数据标准化、去重、日期新鲜度检测、标题/摘要中文翻译和采集报告生成；`fetch-news-detail` 会按单条 `news_id` 读取新闻详情，并用 trafilatura 尽力提取原文正文；`select-news` 保存 1-5 条新闻和主新闻；`plan-news-article` 根据已保存选题生成公众号文章策划稿；`write-news-article` 基于策划和新闻详情生成单篇中文公众号文章，保留原文链接，不搬运原文；`review-news-article` 会对单篇文章做质量评估、事实风险检查、轻量发布清理、发布稿和发布包生成；`score-news` 在采集结果基础上做新闻分类、重要性评分、入选理由和推荐栏目选择；`build-news-events` 会把多条新闻合并成事件卡片，去掉重复报道、保留多来源证据；`write-news-digest` 会基于事件卡片生成中文“今日 AI 圈新闻日报”；`review-news-digest` 会做日报质量评估、轻量去 AI 味、发布状态判断和发布包生成。默认会采集官方 RSS、Hacker News Algolia、arXiv 和 GDELT；如果配置了 `RSSHUB_BASE_URL`，也可以通过 `--source rsshub` 或默认源集合启用 RSSHub 路由。本步骤仍不接公众号 API，不做自动定时发布。
 
 中文翻译默认开启，只翻译 `title` 和 `summary`，不会翻译 `content_text`。翻译复用现有 OpenAI-compatible 配置：`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`。DeepSeek API 可以通过把 `OPENAI_BASE_URL` 配置为 DeepSeek 的 OpenAI-compatible endpoint 来使用。LLM 不可用时采集不会失败，系统会保留英文原文，并把 `translation_status` 标记为 `skipped`；单条翻译失败会标记为 `failed`，不影响其他新闻。
 
@@ -132,6 +169,10 @@ python3 main.py fetch-news-detail --news-id <news_id> --refresh
 python3 main.py select-news --news-id <news_id> --news-id <news_id> --primary-news-id <news_id> --direction "从开发者采用成本角度写"
 python3 main.py plan-news-article --latest
 python3 main.py plan-news-article --selection-id <selection_id>
+python3 main.py write-news-article --latest
+python3 main.py write-news-article --plan-id <plan_id>
+python3 main.py review-news-article --threshold 80 --polish
+python3 main.py review-news-article --article-id <article_id> --threshold 80 --no-polish
 python3 main.py score-news --top 20 --min-score 60
 python3 main.py build-news-events --top 20 --min-score 60 --similarity-threshold 0.55
 python3 main.py write-news-digest --top 12
@@ -152,6 +193,16 @@ workspace/news/news_article_plan_latest.json
 workspace/news/plans/{plan_id}.json
 workspace/snapshots/news_article_plan_latest.json
 outputs/YYYY-MM-DD/news_article_plan.md
+workspace/news/news_article_latest.json
+workspace/news/articles/{article_id}.json
+workspace/snapshots/news_article_latest.json
+outputs/YYYY-MM-DD/news_articles/{article_id}.md
+outputs/YYYY-MM-DD/news_articles/{article_id}_report.md
+workspace/news/news_article_review_latest.json
+workspace/snapshots/news_article_review_latest.json
+outputs/YYYY-MM-DD/news_articles/{article_id}_quality_report.md
+outputs/YYYY-MM-DD/news_articles/{article_id}_publish.md
+outputs/YYYY-MM-DD/news_articles/{article_id}_package.md
 workspace/snapshots/news_latest.json
 outputs/YYYY-MM-DD/news_collection_report.md
 workspace/news/news_scores_latest.json
@@ -170,13 +221,17 @@ outputs/YYYY-MM-DD/news_digest_package/packaged_ai_news_digest.md
 outputs/YYYY-MM-DD/news_digest_package/assets.json
 ```
 
-每条 `NewsItem` 会保留标题、中文标题 `title_zh`、链接、来源类型、发布时间、摘要、中文摘要 `summary_zh`、可选正文、`content_availability`、关键词、topic、`freshness`、去重 key、`translation_status` 和可选 `translation_error`。`translation_status` 可取 `translated`、`skipped`、`failed`、`source_is_chinese`。`freshness` 按运行时当前日期与发布时间计算，可取 `today`、`last_24h`、`last_72h`、`older`、`unknown`。
+每条 `NewsItem` 会保留标题、中文标题 `title_zh`、链接、来源类型、发布时间、摘要、中文摘要 `summary_zh`、可选正文、`content_availability`、关键词、topic、`freshness`、去重 key、`translation_status` 和可选 `translation_error`。`translation_status` 可取 `translated`、`skipped`、`failed`、`source_is_chinese`。`freshness` 按运行时当前日期与发布时间计算，可取 `today`、`last_24h`、`last_72h`、`older`、`unknown`。系统默认完全忽略点赞数、评论数、points、comments 等互动数量；旧数据中即使存在这些字段，也不会用于评分、选题推荐、事件排序、文章策划、写作、质量评估理由或前端推荐理由。
 
 新闻详情会额外输出 `NewsDetailResult`，包括 `content_preview`、`extraction_status`、`extraction_error`、`word_count` 和 `original_language`。详情缓存路径是 `workspace/news/news_articles/{news_id}.json`。如果 `news_latest.json` 中已有 `content_text`，详情会直接标记为 `cached`；如果缺少正文，系统会按需用 trafilatura 重新抓取并提取正文，成功时标记为 `refreshed` 且 `content_availability=full_text`。抓不到全文不会中断流程，详情会返回 `summary_only` 或 `metadata_only`，页面会明确提示“当前仅显示摘要”或“当前仅有标题和链接”，后续仍可基于摘要、标题和原文链接继续选题流程。
 
 新闻选题会输出 `NewsSelectionContext`，保存用户从 AI 新闻中选择的 1-5 条新闻、主新闻 `primary_news_id`、补充来源、当前 `content_availability` 和可选写作方向 `direction_text`。保存路径是 `workspace/news/selections/{selection_id}.json`，最新选题会同步写入 `workspace/news/selections/latest_selection.json`。这是后续公众号文章策划 Agent 的输入；本步骤只保存选题上下文，不合并新闻，也不生成公众号文章。
 
-`plan-news-article` 默认读取 `workspace/news/selections/latest_selection.json`，也可通过 `--selection-id` 指定某次选题。策划会优先读取 `workspace/news/news_articles/{news_id}.json` 的详情缓存；如果没有详情缓存，会从 `workspace/news/news_latest.json` 构造简版详情，不会在策划阶段强制刷新正文。输出的 `NewsArticlePlan` 包含推荐标题、标题候选、核心角度、开头钩子、事件摘要、关键事实、背景信息、为什么重要、读者收获、开发者影响、行业影响、文章结构建议、必须包含、应避免、事实边界、来源链接和 warnings。LLM 可用时使用 OpenAI-compatible 配置生成，LLM 不可用或输出不可解析时自动切到 `fallback`。本步骤只生成写作策划，不生成最终公众号文章。
+`plan-news-article` 默认读取 `workspace/news/selections/latest_selection.json`，也可通过 `--selection-id` 指定某次选题。策划会优先读取 `workspace/news/news_articles/{news_id}.json` 的详情缓存；如果没有详情缓存，会从 `workspace/news/news_latest.json` 构造简版详情，不会在策划阶段强制刷新正文。输出的 `NewsArticlePlan` 包含推荐标题、标题候选、核心角度、开头钩子、事件摘要、关键事实、`valuable_comment_insights`、背景信息、为什么重要、读者收获、开发者影响、行业影响、文章结构建议、必须包含、应避免、事实边界、来源链接和 warnings。`valuable_comment_insights` 只允许来自实际抓取到、且有信息增量的评论正文；如果只知道评论数量或没有评论正文，则保持为空，不总结社区观点。LLM 可用时使用 OpenAI-compatible 配置生成，LLM 不可用或输出不可解析时自动切到 `fallback`。
+
+`write-news-article` 默认读取 `workspace/news/news_article_plan_latest.json` 和 `workspace/news/selections/latest_selection.json`，也可通过 `--plan-id` 指定某次策划。写作会自动加载选中新闻的详情，优先使用 `workspace/news/news_articles/{news_id}.json`，否则从 `workspace/news/news_latest.json` 构造摘要版详情。输出的 `NewsArticle` 包含标题、副标题、公众号文章 Markdown、来源新闻、原文链接、字数、全文/摘要来源数、事实边界、warnings 和 `publish_ready`。Markdown 文件只包含可发布文章，报告文件记录 selection、plan、来源、事实边界、warnings 和生成模式。文章会保留原文链接，不搬运原文；当只有摘要没有全文时会记录 warning，并避免补写未确认细节。
+
+`review-news-article` 默认读取 `workspace/news/news_article_latest.json`、`workspace/news/news_article_plan_latest.json` 和 `workspace/news/selections/latest_selection.json`，也可通过 `--article-id` 指定某篇文章。质量评估以确定性规则为主，分项包括标题、开头、事实完整性、原文链接、解读深度、阅读体验、原创表达和人味表达；`publish_ready` 需要总分达到 `--threshold` 且不存在 high severity 问题。评估会特别检查原文链接缺失、疑似搬运原文、AI 报告腔、读者收获不足、摘要来源场景下的事实扩写风险、把 HN 社区消息写成官方事实，以及 `interaction_metric_used` / `unsupported_community_claim`。文章或发布稿中出现点赞数、评论数、points、comments、评论区炸了、很多人讨论、大家都在讨论、开发者普遍认为等表述，会被标记为 high severity 且 `publish_ready=false`。`--polish` 只做轻量发布清理，不新增事实、不删除原文链接；LLM 不可用时会使用规则清理“本文将”“综上所述”“根据新闻”“资料显示”和互动数量相关表达。输出包括质量报告、发布稿和发布包：`outputs/YYYY-MM-DD/news_articles/{article_id}_quality_report.md`、`{article_id}_publish.md`、`{article_id}_package.md`。发布稿和发布包都会保留标题、正文和原文链接，链接尽量跟随对应内容，不把来源全部堆到最后。
 
 `score-news` 默认读取 `workspace/news/news_latest.json`，输出 `NewsScore` 列表和 `NewsScoringResult` 汇总。评分为确定性规则，LLM 不可用也能运行。分类包括 `major_event`、`model_product`、`open_source`、`research_paper`、`developer_tool`、`funding_business`、`policy_regulation`、`community_discussion`、`tutorial_resource`、`noise`；推荐栏目映射到“今日大事件 / 模型与产品 / 开源与工具 / 论文与研究 / 开发者社区 / 商业与监管 / 暂不推荐”。
 
@@ -185,7 +240,7 @@ outputs/YYYY-MM-DD/news_digest_package/assets.json
 - `freshness_score`：今日、24 小时内、72 小时内、较旧和未知发布时间分层。
 - `source_score`：官方 RSS、arXiv、Hacker News、GDELT、RSSHub 按来源可信度加权。
 - `relevance_score`：命中 OpenAI、Anthropic、DeepSeek、Google DeepMind、NVIDIA、LLM、AI agent、MCP、RAG、model release、API、open source、benchmark、regulation 等关键词加分。
-- `discussion_score`：HN 新闻会读取采集摘要中的 points/comments；没有热度指标时给予基础社区讨论分。
+- `discussion_score`：不读取 points/comments。保留该字段时，开发者社区来源只给固定低权重来源信号，非社区来源为 0。
 - `writing_value_score`：产品发布、开源项目、重大模型更新、开发者影响、行业争议、实用工具等公众号选题信号加分。
 - `importance_score`：结合分类、关键词和发布/重大进展信号估计编辑重要性。
 - 噪音降权：招聘广告、纯营销、内容过短、AI 相关性弱、低信息量标题和论坛提问帖会扣分或归为 `noise`。
@@ -209,13 +264,15 @@ python3 main.py collect-news --hours 72 --limit 100 --translate --translate-limi
 python3 main.py fetch-news-detail --news-id <news_id>
 python3 main.py select-news --news-id <news_id_1> --news-id <news_id_2> --primary-news-id <news_id_1> --direction "从开发者视角写这条 AI 新闻为什么值得关注"
 python3 main.py plan-news-article --latest
+python3 main.py write-news-article --latest
+python3 main.py review-news-article --threshold 80 --polish
 python3 main.py score-news --top 30 --min-score 50
 python3 main.py build-news-events --top 20 --min-score 50
 python3 main.py write-news-digest --top 12
 python3 main.py review-news-digest --threshold 80 --polish
 ```
 
-其中 `collect-news -> 查看详情 -> 选择新闻 -> plan-news-article` 是单篇 AI 新闻公众号文章的写作前流程；后续 `write-news-article` 才会进入最终文章生成。本版本的 `plan-news-article` 只生成策划稿。
+其中 `collect-news -> fetch-news-detail -> select-news -> plan-news-article -> write-news-article -> review-news-article` 是完整单篇 AI 新闻公众号文章流程；`plan-news-article` 只生成策划稿，`write-news-article` 输出文章初稿和生成报告，`review-news-article` 才会输出可复制发布的发布稿、质量报告和发布包。
 
 AI News 页面使用的 API：
 
@@ -231,6 +288,15 @@ GET /api/news/selections/{selection_id}
 POST /api/news/article-plan
 GET /api/news/article-plan/latest
 GET /api/news/article-plan/{plan_id}
+POST /api/news/article/write
+POST /api/news/article/review
+GET /api/news/article/latest
+GET /api/news/article/latest/content
+GET /api/news/article/latest/report
+GET /api/news/article/review/latest
+GET /api/news/article/latest/publish
+GET /api/news/article/latest/package
+GET /api/news/article/{article_id}
 GET /api/news/scores
 GET /api/news/scores/report
 POST /api/news/score
@@ -245,9 +311,9 @@ POST /api/news/digest/review
 GET /api/news/digest/package
 ```
 
-`GET /api/news/latest` 在尚未采集时返回空状态结构，不返回 500。`POST /api/news/collect` 支持 `hours`、`limit`、`sources`、`keywords`、`include_fulltext`、`translate`、`translate_limit`，同步触发一次采集。`GET /api/news/items/{news_id}` 会返回单条详情，优先使用详情缓存，没有正文时会尽力提取原文；`POST /api/news/items/{news_id}/refresh` 会强制重新提取正文。`POST /api/news/selections` 接收 `news_ids`、可选 `primary_news_id` 和 `direction_text`，最多保存 5 条新闻；`GET /api/news/selections/latest` 会返回最新保存的选题上下文。`POST /api/news/article-plan` 接收可选 `selection_id` 和 `use_latest`，同步生成文章策划；`GET /api/news/article-plan/latest` 和 `GET /api/news/article-plan/{plan_id}` 用于读取策划 JSON。`POST /api/news/digest/review` 支持 `threshold` 和 `polish`，同步生成质量评估和发布包。API 默认会截断较长 `content_text`，但不会影响中文标题、中文摘要和 `content_preview` 字段；报告文件只展示短摘要和原文链接，不输出新闻正文大段内容。
+`GET /api/news/latest` 在尚未采集时返回空状态结构，不返回 500。`POST /api/news/collect` 支持 `hours`、`limit`、`sources`、`keywords`、`include_fulltext`、`translate`、`translate_limit`，同步触发一次采集。`GET /api/news/items/{news_id}` 会返回单条详情，优先使用详情缓存，没有正文时会尽力提取原文；`POST /api/news/items/{news_id}/refresh` 会强制重新提取正文。`POST /api/news/selections` 接收 `news_ids`、可选 `primary_news_id` 和 `direction_text`，最多保存 5 条新闻；`GET /api/news/selections/latest` 会返回最新保存的选题上下文。`POST /api/news/article-plan` 接收可选 `selection_id` 和 `use_latest`，同步生成文章策划；`GET /api/news/article-plan/latest` 和 `GET /api/news/article-plan/{plan_id}` 用于读取策划 JSON。`POST /api/news/article/write` 接收可选 `plan_id` 和 `use_latest`，同步生成单篇公众号文章；`GET /api/news/article/latest/content` 读取文章 Markdown，`GET /api/news/article/latest/report` 读取生成报告。`POST /api/news/article/review` 支持 `article_id`、`use_latest`、`threshold` 和 `polish`，同步生成单篇文章质量评估、发布稿和发布包；`GET /api/news/article/review/latest` 读取最新质量报告，`GET /api/news/article/latest/publish` 和 `GET /api/news/article/latest/package` 读取发布稿与发布包 Markdown。`POST /api/news/digest/review` 支持 `threshold` 和 `polish`，同步生成质量评估和发布包。API 默认会截断较长 `content_text`，但不会影响中文标题、中文摘要和 `content_preview` 字段；报告文件只展示短摘要和原文链接，不输出新闻正文大段内容。
 
-React 控制台侧边栏的 **AI 新闻 / AI News** 页面会读取最新采集结果、新闻评分结果、事件卡片结果、文章策划和 AI 日报，默认显示中文标题、中文摘要、`total_score`、分类、推荐栏目和入选理由；页面可按来源、来源类型、新鲜度、正文可用性、翻译状态、推荐新闻、分类、推荐栏目和标题关键词筛选新闻。新闻列表支持勾选 1-5 条新闻，右侧“已选择新闻”面板可设置主新闻、查看详情、移除、清空、填写写作方向并点击“保存选题”，保存后会显示 `selection_id` 并写入 `workspace/news/selections/latest_selection.json`，也可点击“生成文章策划”生成 `NewsArticlePlan`。新闻详情面板会展示标题、来源、发布时间、正文获取状态、中文摘要、原文摘要、正文预览、原文链接，并支持刷新正文、复制正文和打开原文。也可以在页面中设置时间窗口、limit、关键词、来源、全文抓取开关、中文翻译开关和翻译数量后点击“立即采集”，设置 `top` / `min_score` 后点击“评分新闻”，设置事件 `top` / `min_score` / `similarity_threshold` 后点击“构建事件卡片”，点击“生成 AI 日报”一键写出日报，或点击“评估/润色日报”生成质量分、发布状态和发布包。页面包含“新闻列表 / 推荐新闻 / 事件卡片 / 文章策划 / AI 日报 / 采集报告 / 评分报告 / 事件报告”tab；文章策划 tab 会展示推荐标题、标题候选、核心角度、开头钩子、关键事实、背景信息、为什么重要、读者收获、开发者影响、行业影响、文章结构、必须包含、应避免、事实边界、来源链接和 warnings，并支持复制 Markdown 或 JSON 摘要。
+React 控制台侧边栏的 **AI 新闻 / AI News** 页面会读取最新采集结果、新闻评分结果、事件卡片结果、文章策划、公众号文章和 AI 日报，默认显示中文标题、中文摘要、`total_score`、分类、推荐栏目和入选理由；页面不展示旧 JSON 中可能存在的 points/comments，也不会把互动数量显示为推荐理由。页面可按来源、来源类型、新鲜度、正文可用性、翻译状态、推荐新闻、分类、推荐栏目和标题关键词筛选新闻。新闻列表支持勾选 1-5 条新闻，右侧“已选择新闻”面板可设置主新闻、查看详情、移除、清空、填写写作方向并点击“保存选题”，保存后会显示 `selection_id` 并写入 `workspace/news/selections/latest_selection.json`，也可点击“生成文章策划”生成 `NewsArticlePlan`，再点击“生成公众号文章”生成 `NewsArticle`。新闻详情面板会展示标题、来源、发布时间、正文获取状态、中文摘要、原文摘要、正文预览、原文链接，并支持刷新正文、复制正文和打开原文。也可以在页面中设置时间窗口、limit、关键词、来源、全文抓取开关、中文翻译开关和翻译数量后点击“立即采集”，设置 `top` / `min_score` 后点击“评分新闻”，设置事件 `top` / `min_score` / `similarity_threshold` 后点击“构建事件卡片”，点击“生成 AI 日报”一键写出日报，或点击“评估/润色日报”生成质量分、发布状态和发布包。页面包含“新闻列表 / 推荐新闻 / 事件卡片 / 文章策划 / 公众号文章 / AI 日报 / 采集报告 / 评分报告 / 事件报告”tab；文章策划 tab 会展示推荐标题、标题候选、核心角度、开头钩子、关键事实、`valuable_comment_insights`、背景信息、为什么重要、读者收获、开发者影响、行业影响、文章结构、必须包含、应避免、事实边界、来源链接和 warnings，并支持复制 Markdown 或 JSON 摘要；公众号文章 tab 支持预览原稿、查看生成报告、评估/润色文章、查看质量分和主要问题（包括 `interaction_metric_used`），预览发布稿与发布包，并复制或下载文章、发布稿和发布包。
 
 ### 指定 GitHub 项目写作
 
@@ -656,6 +722,11 @@ GET  /api/news/selections/{selection_id}
 POST /api/news/article-plan
 GET  /api/news/article-plan/latest
 GET  /api/news/article-plan/{plan_id}
+POST /api/news/article/write
+GET  /api/news/article/latest
+GET  /api/news/article/latest/content
+GET  /api/news/article/latest/report
+GET  /api/news/article/{article_id}
 GET  /api/news/scores
 GET  /api/news/scores/report
 POST /api/news/collect
@@ -753,7 +824,7 @@ npm run dev
 - Dashboard 首屏从 `GET /api/dashboard` 读取真实运行数据；后端不可用时会显示 warning，并自动回退到 `mockData.ts` 示例数据，不会白屏。
 - Candidates、Score Ranking、Research Notes、Topic Angles 和 Reviews 分别读取 `GET /api/snapshots/discovery`、`score`、`research`、`angles`、`reviews` 的真实快照数据。
 - Articles 从 `GET /api/articles/final` 读取系统发现文章和手动指定文章，并通过 `source: "daily" | "custom"` 标记来源。点击文章后读取对应 Markdown，支持预览、复制、下载、打开 GitHub；可单篇或批量生成/重新生成发布包，并查看和下载 `packaged_article.md`。
-- AI News 从 `GET /api/news/latest`、`GET /api/news/report`、`GET /api/news/items/{news_id}`、`GET /api/news/scores`、`GET /api/news/events`、`GET /api/news/article-plan/latest`、`GET /api/news/digest`、`GET /api/news/digest/review` 和 `GET /api/news/digest/package` 读取最新新闻、详情、报告、评分结果、事件卡片、文章策划、AI 日报质量评估与发布包；新闻列表可勾选 1-5 条新闻，设置主新闻和写作方向后通过 `POST /api/news/selections` 保存选题上下文；“生成文章策划”会调用 `POST /api/news/article-plan` 并展示推荐标题、核心角度、关键事实、事实边界和来源链接；“查看详情”会打开详情面板，“刷新正文”会调用 `POST /api/news/items/{news_id}/refresh`；“立即采集”会同步调用 `POST /api/news/collect`，“评分新闻”会同步调用 `POST /api/news/score`，“构建事件卡片”会同步调用 `POST /api/news/events/build`，“生成 AI 日报”会调用 `POST /api/news/digest/write`，“评估/润色日报”会调用 `POST /api/news/digest/review` 并展示质量分、发布状态、主要问题、修改建议和发布包预览。
+- AI News 从 `GET /api/news/latest`、`GET /api/news/report`、`GET /api/news/items/{news_id}`、`GET /api/news/scores`、`GET /api/news/events`、`GET /api/news/article-plan/latest`、`GET /api/news/article/latest`、`GET /api/news/article/latest/content`、`GET /api/news/article/latest/report`、`GET /api/news/digest`、`GET /api/news/digest/review` 和 `GET /api/news/digest/package` 读取最新新闻、详情、报告、评分结果、事件卡片、文章策划、公众号文章、AI 日报质量评估与发布包；新闻列表可勾选 1-5 条新闻，设置主新闻和写作方向后通过 `POST /api/news/selections` 保存选题上下文；“生成文章策划”会调用 `POST /api/news/article-plan` 并展示推荐标题、核心角度、关键事实、事实边界和来源链接；“生成公众号文章”会调用 `POST /api/news/article/write` 并展示标题、生成模式、字数、warnings、文章预览和生成报告；“查看详情”会打开详情面板，“刷新正文”会调用 `POST /api/news/items/{news_id}/refresh`；“立即采集”会同步调用 `POST /api/news/collect`，“评分新闻”会同步调用 `POST /api/news/score`，“构建事件卡片”会同步调用 `POST /api/news/events/build`，“生成 AI 日报”会调用 `POST /api/news/digest/write`，“评估/润色日报”会调用 `POST /api/news/digest/review` 并展示质量分、发布状态、主要问题、修改建议和发布包预览。
 - Reports 可按日期查看 `article_packages.md`，并单独浏览每篇 `packaged_article.md`，本地截图图片会通过后端安全资源接口加载。
 - Runs History 读取 `GET /api/runs/latest` 和 `GET /api/runs`，展示最近运行、历史运行和阶段状态。
 - Settings 读取 `GET /api/config/status` 和 `GET /api/settings`，可编辑默认运行参数、发现关键词和前端默认语言；页面不展示真实密钥值。
