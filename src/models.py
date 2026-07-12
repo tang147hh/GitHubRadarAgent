@@ -793,3 +793,58 @@ class DailyRun(BaseModel):
     error: Optional[str] = None
     keywords: List[str] = Field(default_factory=list)
     selection_summary: Optional[dict] = None
+
+
+class ContentItem(BaseModel):
+    content_id: str
+    title: str
+    content_type: str
+    source: str
+    source_id: Optional[str] = None
+    safe_name: Optional[str] = None
+    date: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    status: str = "unknown"
+    quality_score: Optional[float] = None
+    publish_ready: bool = False
+    markdown_path: Optional[str] = None
+    publish_path: Optional[str] = None
+    package_path: Optional[str] = None
+    report_path: Optional[str] = None
+    manual_edit_path: Optional[str] = None
+    has_manual_edit: bool = False
+    manual_edit_updated_at: Optional[str] = None
+    source_urls: List[str] = Field(default_factory=list)
+    repo_full_name: Optional[str] = None
+    news_ids: List[str] = Field(default_factory=list)
+    agent_run_id: Optional[str] = None
+    generation_mode: Optional[str] = None
+    word_count: Optional[int] = None
+    tags: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    readiness_status: str = "unknown"
+    readiness_reasons: List[str] = Field(default_factory=list)
+    next_actions: List[str] = Field(default_factory=list)
+
+
+class ManualEditResult(BaseModel):
+    content_id: str
+    manual_edit_path: str
+    saved_at: str
+    word_count: int
+    based_on_variant: str
+
+
+class ContentIndex(BaseModel):
+    generated_at: str
+    total_count: int = 0
+    type_counts: dict[str, int] = Field(default_factory=dict)
+    items: List[ContentItem] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    ready_count: int = 0
+    needs_package_count: int = 0
+    quality_low_count: int = 0
+    needs_review_count: int = 0
+    manual_edit_count: int = 0
+    packaged_count: int = 0

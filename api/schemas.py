@@ -321,3 +321,33 @@ class AgentToolCallRequest(BaseModel):
         if "/" in tool_name or "\\" in tool_name or ".." in tool_name:
             raise ValueError("tool_name must be a registered tool name.")
         return tool_name
+
+
+class AgentRunRequest(BaseModel):
+    goal: str = Field(..., min_length=1, max_length=20_000)
+    context: dict = Field(default_factory=dict)
+    max_recovery_count: int = Field(default=3, ge=0, le=20)
+    reflection_enabled: bool = True
+    auto_approve: bool = False
+
+    @validator("goal")
+    def validate_goal(cls, value: str) -> str:
+        goal = value.strip()
+        if not goal:
+            raise ValueError("goal is required.")
+        lowered = goal.lower()
+        if "openai_api_key" in lowered or "github_personal_access_token" in lowered or "\n.env" in lowered:
+            raise ValueError("goal must not contain token or .env content.")
+        return goal
+
+
+class AgentRunApprovalRequest(BaseModel):
+    approved: bool
+    notes: Optional[str] = Field(default=None, max_length=4_000)
+
+
+class ManualEditRequest(BaseModel):
+    content_id: str = Field(..., min_length=1, max_length=300)
+    content_markdown: str = Field(..., min_length=1, max_length=2_000_000)
+    based_on_variant: Literal["source", "publish", "package"] = "source"
+    notes: Optional[str] = Field(default=None, max_length=10_000)

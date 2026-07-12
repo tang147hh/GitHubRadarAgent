@@ -14,6 +14,7 @@ import {
 import { PipelineProgress } from "../components/PipelineProgress";
 import { RunLogs } from "../components/RunLogs";
 import type { Language, Translation } from "../i18n";
+import { useContentIndexData } from "../hooks/useContentIndexData";
 import { markdownImageSrc } from "../markdownImages";
 import type { CustomArticleResult, JobEvent, JobLog, JobStatus, PipelineStage } from "../types";
 import { copyText, downloadMarkdown, extractTitleFromMarkdown, safeFilename } from "./pageUtils";
@@ -89,6 +90,7 @@ function normalizeSourceName(fileName: string, index: number) {
 }
 
 export function CustomArticlePage({ t, language }: CustomArticlePageProps) {
+  const contentIndex = useContentIndexData();
   const [repoUrl, setRepoUrl] = useState("https://github.com/sharkdp/bat");
   const [direction, setDirection] = useState("");
   const [referenceText, setReferenceText] = useState("");
@@ -159,6 +161,7 @@ export function CustomArticlePage({ t, language }: CustomArticlePageProps) {
       if (!result.exists) {
         setMessage(result.message || copy.emptyLatest);
       }
+      return result;
     } catch (err) {
       setError(err instanceof Error ? err.message : copy.loadFailed);
     }
@@ -188,10 +191,15 @@ export function CustomArticlePage({ t, language }: CustomArticlePageProps) {
       }
       setError("");
       setMessage(copy.runSuccess);
-      await loadLatest();
+      const latest = await loadLatest();
+      if (latest?.exists) {
+        await contentIndex.handleContentMutationSuccess(latest as unknown as Record<string, unknown>, {
+          contentTypes: ["github_custom_article"], repoFullName: latest.full_name, preferredVariant: latest.package_path || latest.packaged_article_path ? "package" : "source", openAfterSync: true,
+        });
+      }
       setActiveTab("article");
     },
-    [copy.runFailed, copy.runSuccess, loadLatest],
+    [contentIndex.handleContentMutationSuccess, copy.runFailed, copy.runSuccess, loadLatest],
   );
 
   const applyJobStatus = useCallback(
@@ -359,8 +367,11 @@ export function CustomArticlePage({ t, language }: CustomArticlePageProps) {
     const safeName = fullName.replace("/", "__");
     setIsPackaging(true);
     try {
-      await packageArticles({ safe_names: [safeName], full_names: [fullName] });
+      const packaged = await packageArticles({ safe_names: [safeName], full_names: [fullName] });
       await loadLatest();
+      await contentIndex.handleContentMutationSuccess(packaged as unknown as Record<string, unknown>, {
+        contentTypes: ["github_custom_article"], repoFullName: fullName, preferredVariant: "package", openAfterSync: true,
+      });
       setActiveTab("package");
       setMessage(t.messages.packageSuccess);
       setError("");

@@ -1,20 +1,29 @@
 import {
+  Archive,
   BarChart3,
-  BookOpenCheck,
   ChevronLeft,
+  CircleDot,
+  ClipboardCheck,
+  Compass,
+  FileArchive,
   FileText,
   Files,
+  Goal,
   History,
   LayoutDashboard,
   ListChecks,
   NotebookText,
   Newspaper,
-  PenLine,
-  PencilLine,
+  PackageCheck,
+  PanelTop,
+  RefreshCcw,
   Radar,
-  Rocket,
+  Send,
+  Search,
+  SquareTerminal,
   Settings,
-  Trophy,
+  Sparkles,
+  Wrench,
 } from "lucide-react";
 import type { Translation } from "../i18n";
 import type { PageKey } from "../types";
@@ -26,20 +35,46 @@ type SidebarProps = {
 };
 
 export function Sidebar({ t, activePage, onNavigate }: SidebarProps) {
-  const navItems = [
-    { key: "dashboard", label: t.nav.dashboard, icon: LayoutDashboard },
-    { key: "dashboard", label: t.nav.runDaily, icon: Rocket },
-    { key: "customArticle", label: t.nav.customArticle, icon: PencilLine },
-    { key: "candidates", label: t.nav.candidates, icon: ListChecks },
-    { key: "scoreRanking", label: t.nav.scoreRanking, icon: Trophy },
-    { key: "researchNotes", label: t.nav.researchNotes, icon: NotebookText },
-    { key: "topicAngles", label: t.nav.topicAngles, icon: PenLine },
-    { key: "articles", label: t.nav.articles, icon: FileText },
-    { key: "aiNews", label: t.nav.aiNews, icon: Newspaper },
-    { key: "reports", label: t.nav.reports, icon: Files },
-    { key: "reviews", label: t.nav.reviews, icon: BookOpenCheck },
-    { key: "runsHistory", label: t.nav.runsHistory, icon: History },
-    { key: "settings", label: t.nav.settings, icon: Settings },
+  const navGroups = [
+    { label: t.nav.overviewGroup, items: [
+      { key: "dashboard", label: t.nav.dashboard, icon: LayoutDashboard },
+      { key: "content-library", label: t.nav.contentLibrary, icon: Archive },
+      { key: "publishing-desk", label: t.nav.publishingDesk, icon: Send },
+    ] },
+    { label: t.nav.githubGroup, items: [
+      { key: "github-workbench", label: t.nav.githubWorkbench, icon: PanelTop },
+      { key: "github-discovery", label: t.nav.githubDiscovery, icon: Compass },
+      { key: "github-candidates", label: t.nav.githubCandidates, icon: ListChecks },
+      { key: "github-research", label: t.nav.githubResearch, icon: NotebookText },
+      { key: "github-articles", label: t.nav.githubArticles, icon: FileText },
+      { key: "github-packages", label: t.nav.githubPackages, icon: PackageCheck },
+      { key: "github-runs", label: t.nav.githubRuns, icon: History },
+    ] },
+    { label: t.nav.aiNewsGroup, items: [
+      { key: "ai-news-workbench", label: t.nav.aiNewsWorkbench, icon: Newspaper },
+      { key: "ai-news-collect", label: t.nav.aiNewsCollect, icon: RefreshCcw },
+      { key: "ai-news-list", label: t.nav.aiNewsList, icon: Files },
+      { key: "ai-news-detail", label: t.nav.aiNewsDetail, icon: Search },
+      { key: "ai-news-selection", label: t.nav.aiNewsSelection, icon: CircleDot },
+      { key: "ai-news-plan", label: t.nav.aiNewsPlan, icon: ClipboardCheck },
+      { key: "ai-news-articles", label: t.nav.aiNewsArticles, icon: FileText },
+      { key: "ai-news-digest", label: t.nav.aiNewsDigest, icon: Sparkles },
+      { key: "ai-news-reports", label: t.nav.aiNewsReports, icon: FileArchive },
+    ] },
+    { label: t.nav.agentGroup, items: [
+      { key: "agent-workbench", label: t.nav.agentWorkbench, icon: SquareTerminal },
+      { key: "agent-goal", label: t.nav.agentGoal, icon: Goal },
+      { key: "agent-plan", label: t.nav.agentPlan, icon: ListChecks },
+      { key: "agent-tools", label: t.nav.agentTools, icon: Wrench },
+      { key: "agent-reflections", label: t.nav.agentReflections, icon: RefreshCcw },
+      { key: "agent-approvals", label: t.nav.agentApprovals, icon: ClipboardCheck },
+      { key: "agent-artifacts", label: t.nav.agentArtifacts, icon: Archive },
+      { key: "agent-runs", label: t.nav.agentRuns, icon: History },
+    ] },
+    { label: t.nav.systemGroup, items: [
+      { key: "reports", label: t.nav.reports, icon: Files },
+      { key: "settings", label: t.nav.settings, icon: Settings },
+    ] },
   ];
 
   return (
@@ -52,22 +87,27 @@ export function Sidebar({ t, activePage, onNavigate }: SidebarProps) {
       </div>
 
       <nav className="sidebar-nav" aria-label="Main navigation">
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          const isActive = item.key === activePage;
-          return (
-            <button
-              className={`nav-item ${isActive ? "active" : ""}`}
-              type="button"
-              key={item.label}
-              onClick={() => onNavigate(item.key as PageKey)}
-              aria-current={isActive ? "page" : undefined}
-            >
-              <Icon size={18} aria-hidden="true" />
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
+        {navGroups.map((group) => (
+          <section className="nav-group" key={group.label}>
+            <h2>{group.label}</h2>
+            {group.items.map((item) => {
+              const Icon = item.icon;
+              const isActive = item.key === activePage;
+              return (
+                <button
+                  className={`nav-item ${isActive ? "active" : ""}`}
+                  type="button"
+                  key={item.key}
+                  onClick={() => onNavigate(item.key as PageKey)}
+                  aria-current={isActive ? "page" : undefined}
+                >
+                  <Icon size={17} aria-hidden="true" />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </section>
+        ))}
       </nav>
 
       <button className="collapse-button" type="button">

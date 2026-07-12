@@ -15,7 +15,10 @@ from pydantic import ValidationError
 
 from api.jobs import job_manager
 from api.schemas import (
+    AgentRunApprovalRequest,
+    AgentRunRequest,
     AgentToolCallRequest,
+    ManualEditRequest,
     CustomArticleRequest,
     NewsArticlePlanRequest,
     NewsArticleReviewRequest,
@@ -30,8 +33,11 @@ from api.schemas import (
     RunDailyRequest,
     UiSettings,
 )
+from src.agent_runtime import AgentRuntime
 from src.agent_tools import build_default_tool_registry
 from src.config import get_settings
+from src.content_index import ContentIndexService
+from src.manual_edits import ManualEditService
 from src.news_collector import NewsCollectorService, utc_now_iso
 from src.news_article_planner import NewsArticlePlannerService
 from src.news_article_polisher import NewsArticlePolisherService
@@ -1248,6 +1254,161 @@ def health() -> dict[str, Any]:
     }
 
 
+def _content_index_or_build():
+    service = ContentIndexService(PROJECT_ROOT)
+    index = service.load_latest_index()
+    if index is None:
+        index = service.build_index()
+    return service, index
+
+
+@app.get("/api/content")
+def content_index() -> dict[str, Any]:
+    try:
+        _, index = _content_index_or_build()
+        return _model_dump(index)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Content index build failed: {type(exc).__name__}: {exc}")
+
+
+@app.post("/api/content/rebuild")
+def rebuild_content_index() -> dict[str, Any]:
+    try:
+        index = ContentIndexService(PROJECT_ROOT).build_index()
+        return _model_dump(index)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Content index rebuild failed: {type(exc).__name__}: {exc}")
+
+
+@app.get("/api/content/report")
+def content_index_report() -> dict[str, Any]:
+    try:
+        content, path = ContentIndexService(PROJECT_ROOT).read_report()
+        return {"content": content, "path": path}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/api/content/{content_id}")
+def content_item(content_id: str) -> dict[str, Any]:
+    service, _ = _content_index_or_build()
+    item = service.find_item(content_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail=f"Content item not found: {content_id}")
+    return _model_dump(item)
+
+
+@app.get("/api/content/{content_id}/markdown")
+def content_markdown(content_id: str, variant: str = "source") -> dict[str, Any]:
+    try:
+        content, path = ContentIndexService(PROJECT_ROOT).read_markdown(content_id, variant)
+        return {"content_id": content_id, "variant": variant, "content": content, "path": path}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Content item not found: {content_id}")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.get("/api/content/{content_id}/manual-edit")
+def get_content_manual_edit(content_id: str) -> dict[str, Any]:
+    try:
+        return ManualEditService(PROJECT_ROOT).get(content_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.put("/api/content/{content_id}/manual-edit")
+def put_content_manual_edit(content_id: str, request: ManualEditRequest) -> dict[str, Any]:
+    if request.content_id != content_id:
+        raise HTTPException(status_code=400, detail="Path content_id must match request content_id")
+    try:
+        result = ManualEditService(PROJECT_ROOT).save(
+            content_id, request.content_markdown, request.based_on_variant, request.notes
+        )
+        return _model_dump(result)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Content item not found: {content_id}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/content/{content_id}/manual-edit")
+def delete_content_manual_edit(content_id: str) -> dict[str, Any]:
+    try:
+        return ManualEditService(PROJECT_ROOT).delete(content_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@app.post("/api/content/{content_id}/package-from-manual")
+def package_content_from_manual(content_id: str) -> dict[str, Any]:
+    try:
+        return ManualEditService(PROJECT_ROOT).package_from_manual(content_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Content item not found: {content_id}")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/publishing/desk")
+def publishing_desk() -> dict[str, Any]:
+    try:
+        return ContentIndexService(PROJECT_ROOT).build_publishing_desk()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Publishing desk failed: {type(exc).__name__}: {exc}")
+
+
+@app.post("/api/publishing/rebuild")
+def rebuild_publishing_desk() -> dict[str, Any]:
+    try:
+        return ContentIndexService(PROJECT_ROOT).build_publishing_desk(rebuild=True)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Publishing desk rebuild failed: {type(exc).__name__}: {exc}")
+
+
+@app.post("/api/publishing/package-missing")
+def package_missing_publishing_content() -> dict[str, Any]:
+    service = ContentIndexService(PROJECT_ROOT)
+    desk = service.build_publishing_desk()
+    candidates = [item for item in desk["items"] if not item.get("package_path") and (item.get("markdown_path") or item.get("publish_path"))]
+    packaged: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    manual_service = ManualEditService(PROJECT_ROOT)
+    for item in candidates:
+        content_id = str(item["content_id"])
+        if not item.get("has_manual_edit"):
+            warnings.append(f"{content_id}: automatic packaging currently requires a manual edit")
+            continue
+        try:
+            packaged.append(manual_service.package_from_manual(content_id))
+        except (KeyError, FileNotFoundError, ValueError) as exc:
+            warnings.append(f"{content_id}: {exc}")
+    rebuilt = service.build_publishing_desk(rebuild=True)
+    return {
+        "attempted_count": len(candidates),
+        "packaged_count": len(packaged),
+        "packaged": packaged,
+        "warnings": warnings,
+        "desk": rebuilt,
+    }
+
+
+@app.get("/api/publishing/export/{content_id}")
+def export_publishing_markdown(content_id: str) -> dict[str, Any]:
+    try:
+        return ContentIndexService(PROJECT_ROOT).export_publish_markdown(content_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Publishing content not found: {content_id}")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 def _agent_model_payload(model: Any) -> Any:
     if hasattr(model, "model_dump"):
         return model.model_dump()
@@ -1268,6 +1429,58 @@ def call_agent_tool(request: AgentToolCallRequest) -> dict[str, Any]:
     registry = build_default_tool_registry()
     result = registry.call(request.tool_name, request.arguments)
     return _agent_model_payload(result)
+
+
+@app.post("/api/agent/runs")
+def start_agent_run(request: AgentRunRequest) -> dict[str, Any]:
+    run = AgentRuntime().run_goal(
+        request.goal,
+        context=request.context,
+        max_recovery_count=request.max_recovery_count,
+        reflection_enabled=request.reflection_enabled,
+        auto_approve=request.auto_approve,
+    )
+    return _agent_model_payload(run)
+
+
+@app.get("/api/agent/runs/latest")
+def latest_agent_run() -> dict[str, Any]:
+    try:
+        run = AgentRuntime().load_latest_run()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _agent_model_payload(run)
+
+
+@app.get("/api/agent/runs/{run_id}")
+def get_agent_run(run_id: str) -> dict[str, Any]:
+    try:
+        run = AgentRuntime().load_run(run_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return _agent_model_payload(run)
+
+
+@app.post("/api/agent/runs/{run_id}/approve")
+def approve_agent_run(run_id: str, request: AgentRunApprovalRequest) -> dict[str, Any]:
+    try:
+        run = AgentRuntime().approve_run(run_id, approved=request.approved, notes=request.notes)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _agent_model_payload(run)
+
+
+@app.post("/api/agent/runs/{run_id}/resume")
+def resume_agent_run(run_id: str) -> dict[str, Any]:
+    try:
+        run = AgentRuntime().resume_run(run_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _agent_model_payload(run)
 
 
 @app.get("/api/config/status")

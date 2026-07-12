@@ -42,6 +42,18 @@ import type {
   RunsResponse,
   SnapshotName,
   UiSettings,
+  AgentRun,
+  AgentRunApprovalRequest,
+  AgentRunRequest,
+  ContentIndex,
+  ContentItem,
+  ContentMarkdown,
+  ContentVariant,
+  ManualEdit,
+  ManualEditRequest,
+  PackageMissingResult,
+  PublishingDesk,
+  PublishingExport,
 } from "./types";
 
 const viteEnv = (import.meta as ImportMeta & { env?: { VITE_API_BASE_URL?: string } }).env;
@@ -117,12 +129,30 @@ export async function putJson<T>(path: string, body: unknown): Promise<T> {
   }
 }
 
+export async function deleteJson<T>(path: string): Promise<T> {
+  try {
+    const response = await fetch(`${API_BASE_URL}${path}`, { method: "DELETE" });
+    if (!response.ok) throw new ApiError(await parseErrorMessage(response), response.status);
+    return (await response.json()) as T;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(error instanceof Error ? error.message : "Backend API is unavailable");
+  }
+}
+
 export const fetchHealth = () => getJson<Record<string, unknown>>("/api/health");
 export const fetchConfigStatus = () => getJson<ConfigStatus>("/api/config/status");
 export const fetchSettings = () => getJson<SettingsResponse>("/api/settings");
 export const saveSettings = (settings: UiSettings) => putJson<SettingsResponse>("/api/settings", settings);
 export const resetSettings = () => postJson<SettingsResponse>("/api/settings/reset", {});
 export const fetchDashboard = () => getJson<DashboardResponse>("/api/dashboard");
+export const startAgentRun = (request: AgentRunRequest) => postJson<AgentRun>("/api/agent/runs", request);
+export const fetchLatestAgentRun = () => getJson<AgentRun>("/api/agent/runs/latest");
+export const fetchAgentRun = (runId: string) => getJson<AgentRun>(`/api/agent/runs/${encodeURIComponent(runId)}`);
+export const approveAgentRun = (runId: string, request: AgentRunApprovalRequest) =>
+  postJson<AgentRun>(`/api/agent/runs/${encodeURIComponent(runId)}/approve`, request);
+export const resumeAgentRun = (runId: string) =>
+  postJson<AgentRun>(`/api/agent/runs/${encodeURIComponent(runId)}/resume`, {});
 export const fetchLatestNews = () => getJson<NewsCollectionResult>("/api/news/latest");
 export const fetchNewsReport = () => getJson<NewsReportContent>("/api/news/report");
 export const collectNews = (request: NewsCollectRequest) => postJson<NewsCollectionResult>("/api/news/collect", request);
@@ -225,3 +255,29 @@ export const fetchJob = (jobId: string) => getJson<JobStatus>(`/api/jobs/${encod
 export const fetchJobs = () => getJson<{ jobs: JobStatus[] }>("/api/jobs");
 export const createJobEventSource = (jobId: string) =>
   new EventSource(`${API_BASE_URL}/api/jobs/${encodeURIComponent(jobId)}/events`);
+
+export const fetchContentIndex = () => getJson<ContentIndex>("/api/content");
+export const rebuildContentIndex = () => postJson<ContentIndex>("/api/content/rebuild", {});
+export const fetchContentItem = (contentId: string) =>
+  getJson<ContentItem>(`/api/content/${encodeURIComponent(contentId)}`);
+export const fetchContentMarkdown = (contentId: string, variant: ContentVariant) =>
+  getJson<ContentMarkdown>(
+    `/api/content/${encodeURIComponent(contentId)}/markdown?variant=${encodeURIComponent(variant)}`,
+  );
+export const fetchContentIndexReport = () => getJson<ContentMarkdown>("/api/content/report");
+export const fetchManualEdit = (contentId: string) =>
+  getJson<ManualEdit>(`/api/content/${encodeURIComponent(contentId)}/manual-edit`);
+export const saveManualEdit = (contentId: string, request: ManualEditRequest) =>
+  putJson<Omit<ManualEdit, "content_markdown">>(`/api/content/${encodeURIComponent(contentId)}/manual-edit`, request);
+export const deleteManualEdit = (contentId: string) =>
+  deleteJson<{ content_id: string; deleted: boolean }>(`/api/content/${encodeURIComponent(contentId)}/manual-edit`);
+export const packageFromManual = (contentId: string) =>
+  postJson<{ content_id: string; package_path: string; manual_edit_path: string; generated_at: string }>(
+    `/api/content/${encodeURIComponent(contentId)}/package-from-manual`, {},
+  );
+export const fetchPublishingDesk = () => getJson<PublishingDesk>("/api/publishing/desk");
+export const rebuildPublishingDesk = () => postJson<PublishingDesk>("/api/publishing/rebuild", {});
+export const packageMissingPublishingContent = () =>
+  postJson<PackageMissingResult>("/api/publishing/package-missing", {});
+export const fetchPublishingExport = (contentId: string) =>
+  getJson<PublishingExport>(`/api/publishing/export/${encodeURIComponent(contentId)}`);

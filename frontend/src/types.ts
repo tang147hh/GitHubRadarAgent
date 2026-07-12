@@ -6,6 +6,128 @@ export type DashboardStats = {
   average_quality_score?: number;
 };
 
+export type ContentType =
+  | "github_article"
+  | "github_custom_article"
+  | "ai_news_article"
+  | "ai_news_digest"
+  | "agent_artifact"
+  | "manual_edit";
+
+export type ContentSource = "github" | "ai_news" | "agent" | "manual";
+export type ContentVariant = "source" | "publish" | "package" | "report" | "manual";
+export type ReadinessStatus =
+  | "ready"
+  | "needs_review"
+  | "needs_package"
+  | "needs_manual_edit"
+  | "quality_low"
+  | "missing_content"
+  | "unknown";
+
+export type ContentItem = {
+  content_id: string;
+  title: string;
+  content_type: ContentType;
+  source: ContentSource;
+  source_id?: string | null;
+  safe_name?: string | null;
+  date: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  status: "draft" | "reviewed" | "publish_ready" | "packaged" | "unknown" | string;
+  quality_score?: number | null;
+  publish_ready: boolean;
+  markdown_path?: string | null;
+  publish_path?: string | null;
+  package_path?: string | null;
+  report_path?: string | null;
+  manual_edit_path?: string | null;
+  has_manual_edit: boolean;
+  manual_edit_updated_at?: string | null;
+  source_urls: string[];
+  repo_full_name?: string | null;
+  news_ids: string[];
+  agent_run_id?: string | null;
+  generation_mode?: string | null;
+  word_count?: number | null;
+  tags: string[];
+  warnings: string[];
+  readiness_status: ReadinessStatus;
+  readiness_reasons: string[];
+  next_actions: string[];
+};
+
+export type ContentIndex = {
+  generated_at: string;
+  total_count: number;
+  type_counts: Record<string, number>;
+  items: ContentItem[];
+  warnings: string[];
+  ready_count: number;
+  needs_package_count: number;
+  quality_low_count: number;
+  needs_review_count: number;
+  manual_edit_count: number;
+  packaged_count: number;
+};
+
+export type PublishingSummary = {
+  ready_count: number;
+  needs_package_count: number;
+  quality_low_count: number;
+  needs_review_count: number;
+  manual_edit_count: number;
+  packaged_count: number;
+};
+
+export type PublishingDesk = {
+  generated_at: string;
+  summary: PublishingSummary;
+  items: ContentItem[];
+  warnings: string[];
+};
+
+export type PublishingExport = {
+  content_id: string;
+  title: string;
+  variant: Exclude<ContentVariant, "report">;
+  content: string;
+  path: string;
+  source_urls: string[];
+  has_package: boolean;
+  warnings: string[];
+};
+
+export type PackageMissingResult = {
+  attempted_count: number;
+  packaged_count: number;
+  packaged: Array<{ content_id: string; package_path: string }>;
+  warnings: string[];
+  desk: PublishingDesk;
+};
+
+export type ContentMarkdown = {
+  content_id?: string;
+  variant?: ContentVariant;
+  content: string;
+  path: string;
+};
+
+export type ManualEdit = {
+  content_id: string;
+  content_markdown: string;
+  manual_edit_path: string;
+  saved_at: string;
+  word_count: number;
+  based_on_variant: "source" | "publish" | "package";
+  notes?: string | null;
+};
+
+export type ManualEditRequest = Pick<ManualEdit, "content_id" | "content_markdown" | "based_on_variant"> & {
+  notes?: string | null;
+};
+
 export type DashboardHealth = {
   github_token_configured?: boolean;
   llm_configured?: boolean;
@@ -1212,8 +1334,124 @@ export type ConfigStatus = {
   daily_keywords?: string[];
 };
 
+export type AgentRecoveryAction = {
+  action_id: string;
+  action_type: "insert_step" | "update_step_args" | "skip_step" | "stop_run";
+  tool_name?: string | null;
+  arguments: Record<string, unknown>;
+  reason: string;
+  inserted_after_step_id?: string | null;
+};
+
+export type AgentReflection = {
+  reflection_id: string;
+  run_id: string;
+  step_id: string;
+  tool_name: string;
+  created_at: string;
+  status: "pass" | "needs_recovery" | "unrecoverable";
+  observations: string[];
+  issues: string[];
+  recovery_actions: AgentRecoveryAction[];
+  decision: string;
+};
+
+export type AgentPlanStep = {
+  step_id: string;
+  tool_name: string;
+  arguments: Record<string, unknown>;
+  reason: string;
+  status: "pending" | "running" | "waiting_approval" | "approved" | "rejected" | "succeeded" | "failed" | "skipped" | string;
+  tool_call_id?: string | null;
+  observation: string;
+  artifacts: string[];
+  error?: string | null;
+};
+
+export type AgentPlan = {
+  plan_id: string;
+  skill_name: string;
+  goal: string;
+  steps: AgentPlanStep[];
+  generated_at: string;
+  generation_mode: string;
+  warnings: string[];
+};
+
+export type AgentApprovalHistoryItem = {
+  step_id: string;
+  tool_name: string;
+  approved: boolean;
+  notes?: string | null;
+  decided_at: string;
+};
+
+export type AgentRun = {
+  run_id: string;
+  goal: string;
+  skill_name: string;
+  status: "planned" | "running" | "needs_input" | "succeeded" | "failed" | string;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  current_step_id?: string | null;
+  plan: AgentPlan;
+  observations: string[];
+  artifacts: string[];
+  error?: string | null;
+  warnings: string[];
+  reflections: AgentReflection[];
+  recovery_count: number;
+  max_recovery_count: number;
+  reflection_enabled: boolean;
+  auto_approve: boolean;
+  pending_approval_step_id?: string | null;
+  approval_prompt?: string | null;
+  approval_options: string[];
+  approval_history: AgentApprovalHistoryItem[];
+};
+
+export type AgentRunRequest = {
+  goal: string;
+  context?: Record<string, unknown>;
+  max_recovery_count: number;
+  reflection_enabled?: boolean;
+  auto_approve: boolean;
+};
+
+export type AgentRunApprovalRequest = {
+  approved: boolean;
+  notes?: string;
+};
+
 export type PageKey =
   | "dashboard"
+  | "content-library"
+  | "publishing-desk"
+  | "github-workbench"
+  | "github-discovery"
+  | "github-candidates"
+  | "github-research"
+  | "github-articles"
+  | "github-packages"
+  | "github-runs"
+  | "ai-news-workbench"
+  | "ai-news-collect"
+  | "ai-news-list"
+  | "ai-news-detail"
+  | "ai-news-selection"
+  | "ai-news-plan"
+  | "ai-news-articles"
+  | "ai-news-digest"
+  | "ai-news-reports"
+  | "agent-workbench"
+  | "agent-goal"
+  | "agent-plan"
+  | "agent-tools"
+  | "agent-reflections"
+  | "agent-approvals"
+  | "agent-artifacts"
+  | "agent-runs"
   | "customArticle"
   | "candidates"
   | "scoreRanking"
@@ -1221,6 +1459,7 @@ export type PageKey =
   | "topicAngles"
   | "articles"
   | "aiNews"
+  | "agentConsole"
   | "reports"
   | "reviews"
   | "runsHistory"

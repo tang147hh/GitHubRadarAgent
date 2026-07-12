@@ -18,6 +18,15 @@ import { copyText, downloadMarkdown } from "./fileUtils";
 import type { Language } from "./i18n";
 import { translations } from "./i18n";
 import { AINewsPage } from "./pages/AINewsPage";
+import {
+  AINewsArticlesPage, AINewsCollectPage, AINewsDetailPage, AINewsDigestPage, AINewsListPage,
+  AINewsPlanPage, AINewsReportsPage, AINewsSelectionPage, AINewsWorkbenchPage,
+} from "./pages/AINewsWorkspacePages";
+import { AgentConsolePage } from "./pages/AgentConsolePage";
+import {
+  AgentApprovalsPage, AgentArtifactsPage, AgentGoalPage, AgentPlanPage, AgentReflectionsPage,
+  AgentRunsPage, AgentToolsPage, AgentWorkbenchPage,
+} from "./pages/AgentWorkspacePages";
 import { ArticlesPage } from "./pages/ArticlesPage";
 import { CandidatesPage } from "./pages/CandidatesPage";
 import { CustomArticlePage } from "./pages/CustomArticlePage";
@@ -29,7 +38,15 @@ import { RunsHistoryPage } from "./pages/RunsHistoryPage";
 import { ScoreRankingPage } from "./pages/ScoreRankingPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { TopicAnglesPage } from "./pages/TopicAnglesPage";
-import type { DashboardResponse, FinalArticleItem, JobEvent, JobLog, JobStatus, PageKey, PipelineStage, RunDailyParams, UiSettings } from "./types";
+import { ContentLibraryPage } from "./pages/ContentLibraryPage";
+import { PublishingDeskPage } from "./pages/PublishingDeskPage";
+import {
+  GitHubArticlesPage, GitHubCandidatesPage, GitHubDiscoveryPage, GitHubPackagesPage,
+  GitHubResearchPage, GitHubRunsPage, GitHubWorkbenchPage,
+} from "./pages/GitHubWorkspacePages";
+import { AgentRunProvider } from "./hooks/useAgentRunData";
+import { useContentIndexData } from "./hooks/useContentIndexData";
+import type { ContentVariant, DashboardResponse, FinalArticleItem, JobEvent, JobLog, JobStatus, PageKey, PipelineStage, RunDailyParams, UiSettings } from "./types";
 
 type NavigateOptions = {
   date?: string;
@@ -211,6 +228,7 @@ function runInfoFromJob(job: JobStatus | null) {
 }
 
 function App() {
+  const contentIndex = useContentIndexData();
   const [language, setLanguage] = useState<Language>("zh");
   const [activePage, setActivePage] = useState<PageKey>("dashboard");
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
@@ -232,6 +250,7 @@ function App() {
   const [uiSettings, setUiSettings] = useState<UiSettings | null>(null);
   const [selectedOutputDate, setSelectedOutputDate] = useState("");
   const [selectedOutputSelection, setSelectedOutputSelection] = useState<ReportSelection | null>(null);
+  const [selectedContent, setSelectedContent] = useState<{ contentId: string; variant: ContentVariant } | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const pollingRef = useRef<number | null>(null);
   const t = useMemo(() => translations[language], [language]);
@@ -298,10 +317,18 @@ function App() {
     reviewPassRate: activeDashboard.stats?.review_pass_rate ?? "0%",
   };
 
+  const rawLastRunStatus = activeDashboard.health?.last_run_status || "";
+  const localizedLastRunStatus = ["success", "succeeded", "completed"].includes(rawLastRunStatus)
+    ? t.status.success
+    : rawLastRunStatus === "failed"
+      ? t.status.failed
+      : rawLastRunStatus === "running"
+        ? t.status.running
+        : rawLastRunStatus || t.status.unknown;
   const statuses = {
     github: activeDashboard.health?.github_token_configured ? t.status.githubValue : t.status.notConfigured,
     llm: activeDashboard.health?.llm_configured ? t.status.llmValue : t.status.notConfigured,
-    lastRun: isRunning ? t.status.running : activeDashboard.health?.last_run_status || t.status.unknown,
+    lastRun: isRunning ? t.status.running : localizedLastRunStatus,
   };
 
   const showActionMessage = (message: string) => {
@@ -318,6 +345,16 @@ function App() {
     }
     setActivePage(page);
   }, []);
+
+  const navigateToContent = useCallback((contentId: string, variant: ContentVariant = "source") => {
+    setSelectedContent({ contentId, variant });
+    setActivePage("content-library");
+  }, []);
+
+  useEffect(() => {
+    contentIndex.setContentNavigator(navigateToContent);
+    return () => contentIndex.setContentNavigator(null);
+  }, [contentIndex.setContentNavigator, navigateToContent]);
 
   const clearPolling = () => {
     if (pollingRef.current) {
@@ -339,10 +376,13 @@ function App() {
         return;
       }
       setRunError("");
+      await Promise.all([
+        refreshDashboard(),
+        contentIndex.handleContentMutationSuccess(null, { contentTypes: ["github_article"], openAfterSync: false }),
+      ]);
       showActionMessage(t.messages.jobRefreshed);
-      await refreshDashboard();
     },
-    [refreshDashboard, t.messages.jobRefreshed, t.messages.runFailed],
+    [contentIndex.handleContentMutationSuccess, refreshDashboard, t.messages.jobRefreshed, t.messages.runFailed],
   );
 
   const applyJobStatus = useCallback(
@@ -584,6 +624,32 @@ function App() {
   };
 
   const renderActivePage = () => {
+    if (activePage === "content-library") return <ContentLibraryPage language={language} onNavigate={handleNavigate} initialContentId={selectedContent?.contentId} initialVariant={selectedContent?.variant} onInitialContentOpened={() => setSelectedContent(null)} />;
+    if (activePage === "publishing-desk") return <PublishingDeskPage language={language} onOpenLibrary={navigateToContent} />;
+    if (activePage === "github-workbench") return <GitHubWorkbenchPage t={t} dashboard={activeDashboard} onNavigate={handleNavigate} />;
+    if (activePage === "github-discovery") return <GitHubDiscoveryPage t={t} />;
+    if (activePage === "github-candidates") return <GitHubCandidatesPage t={t} />;
+    if (activePage === "github-research") return <GitHubResearchPage t={t} />;
+    if (activePage === "github-articles") return <GitHubArticlesPage t={t} language={language} onOpenLibrary={navigateToContent} />;
+    if (activePage === "github-packages") return <GitHubPackagesPage t={t} language={language} onOpenLibrary={navigateToContent} />;
+    if (activePage === "github-runs") return <GitHubRunsPage t={t} onViewOutputs={(date) => handleNavigate("reports", { date })} />;
+    if (activePage === "ai-news-workbench") return <AINewsWorkbenchPage t={t} onNavigate={handleNavigate} />;
+    if (activePage === "ai-news-collect") return <AINewsCollectPage t={t} />;
+    if (activePage === "ai-news-list") return <AINewsListPage t={t} />;
+    if (activePage === "ai-news-detail") return <AINewsDetailPage t={t} />;
+    if (activePage === "ai-news-selection") return <AINewsSelectionPage t={t} />;
+    if (activePage === "ai-news-plan") return <AINewsPlanPage t={t} />;
+    if (activePage === "ai-news-articles") return <AINewsArticlesPage t={t} language={language} onOpenLibrary={navigateToContent} />;
+    if (activePage === "ai-news-digest") return <AINewsDigestPage t={t} language={language} onOpenLibrary={navigateToContent} />;
+    if (activePage === "ai-news-reports") return <AINewsReportsPage t={t} />;
+    if (activePage === "agent-workbench") return <AgentWorkbenchPage language={language} onNavigate={handleNavigate} />;
+    if (activePage === "agent-goal") return <AgentGoalPage language={language} />;
+    if (activePage === "agent-plan") return <AgentPlanPage language={language} />;
+    if (activePage === "agent-tools") return <AgentToolsPage language={language} />;
+    if (activePage === "agent-reflections") return <AgentReflectionsPage language={language} />;
+    if (activePage === "agent-approvals") return <AgentApprovalsPage language={language} />;
+    if (activePage === "agent-artifacts") return <AgentArtifactsPage language={language} onNavigate={handleNavigate} onOpenLibrary={navigateToContent} />;
+    if (activePage === "agent-runs") return <AgentRunsPage language={language} />;
     if (activePage === "customArticle") return <CustomArticlePage t={t} language={language} />;
     if (activePage === "candidates") return <CandidatesPage t={t} />;
     if (activePage === "scoreRanking") return <ScoreRankingPage t={t} />;
@@ -591,6 +657,7 @@ function App() {
     if (activePage === "topicAngles") return <TopicAnglesPage t={t} />;
     if (activePage === "articles") return <ArticlesPage t={t} language={language} />;
     if (activePage === "aiNews") return <AINewsPage t={t} />;
+    if (activePage === "agentConsole") return <AgentConsolePage language={language} />;
     if (activePage === "reports") {
       return <ReportsPage t={t} initialDate={selectedOutputDate} initialSelection={selectedOutputSelection} />;
     }
@@ -634,6 +701,7 @@ function App() {
         onPreviewArticle={(article) => void loadArticleMarkdown(article)}
         onDownloadArticle={(article) => void handleDownload(article)}
         runInfoFromJob={runInfoFromJob}
+        onOpenPublishingDesk={() => handleNavigate("publishing-desk")}
       />
     );
   };
@@ -652,9 +720,16 @@ function App() {
           onRefresh={refreshDashboard}
           loading={loading}
         />
-        <main className="dashboard">
+        <AgentRunProvider><main className="dashboard">
+          {contentIndex.syncStatus !== "idle" ? <div className={`banner content-sync-banner ${contentIndex.syncStatus === "failed" ? "error" : contentIndex.syncStatus === "not_found" ? "warning" : "success"}`} role="status">
+            {contentIndex.syncStatus === "syncing" ? t.contentSync.syncing : null}
+            {contentIndex.syncStatus === "updated" ? t.contentSync.updated : null}
+            {contentIndex.syncStatus === "opened" ? t.contentSync.opened : null}
+            {contentIndex.syncStatus === "not_found" ? t.contentSync.notFound : null}
+            {contentIndex.syncStatus === "failed" ? t.contentSync.failed : null}
+          </div> : null}
           {renderActivePage()}
-        </main>
+        </main></AgentRunProvider>
       </div>
     </div>
   );

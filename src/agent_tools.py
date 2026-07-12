@@ -125,7 +125,7 @@ class ToolRegistry:
 
     def register(self, tool: AgentTool, handler: ToolHandler) -> None:
         if tool.name in self._tools:
-            raise ValueError(f"Agent tool already registered: {tool.name}")
+            raise ValueError(f"Agent 工具已注册：{tool.name}")
         self._tools[tool.name] = tool
         self._handlers[tool.name] = handler
 
@@ -133,7 +133,7 @@ class ToolRegistry:
         try:
             return self._tools[name]
         except KeyError as exc:
-            raise KeyError(f"Unknown agent tool: {name}") from exc
+            raise KeyError(f"未知 Agent 工具：{name}") from exc
 
     def list_tools(self, skill_name: str | None = None) -> list[AgentTool]:
         tools = sorted(self._tools.values(), key=lambda tool: tool.name)
@@ -159,7 +159,7 @@ class ToolRegistry:
                 success=True,
                 started_at=started_at,
                 finished_at=finished_at,
-                result_summary=str(raw_result.get("result_summary") or f"{name} completed."),
+                result_summary=str(raw_result.get("result_summary") or f"{name} 执行完成。"),
                 artifacts=_clean_list(raw_result.get("artifacts")),
                 payload=_jsonable(raw_result.get("payload") or {}),
                 error=None,
@@ -174,7 +174,7 @@ class ToolRegistry:
                 success=False,
                 started_at=started_at,
                 finished_at=finished_at,
-                result_summary=f"{name} failed.",
+                result_summary=f"{name} 执行失败。",
                 artifacts=[],
                 payload={},
                 error=f"{type(exc).__name__}: {exc}",
@@ -250,7 +250,7 @@ def _register_github_tools(registry: ToolRegistry) -> None:
                 input_schema=input_schema,
                 output_schema=output_schema,
                 side_effects=side_effects,
-                requires_confirmation=False,
+                requires_confirmation=name in {"github.write_articles", "github.write_custom_article"},
                 tags=tags,
             ),
             handler,
@@ -258,7 +258,7 @@ def _register_github_tools(registry: ToolRegistry) -> None:
 
     register(
         "github.discover_projects",
-        "Discover GitHub repository candidates for the configured or provided keywords.",
+        "根据已配置或指定的关键词发现 GitHub 候选项目。",
         _schema(
             {
                 "limit_per_keyword": {"type": "integer", "default": 10, "minimum": 1, "maximum": 50},
@@ -271,7 +271,7 @@ def _register_github_tools(registry: ToolRegistry) -> None:
     )
     register(
         "github.score_projects",
-        "Score latest discovered GitHub repositories and keep the top candidates.",
+        "为最近发现的 GitHub 项目评分并保留高分候选项目。",
         _schema({"top": {"type": "integer", "default": 10, "minimum": 1, "maximum": 100}}),
         ["writes workspace/snapshots/score_latest.json", "writes outputs/YYYY-MM-DD/score_report.md"],
         _github_score,
@@ -279,7 +279,7 @@ def _register_github_tools(registry: ToolRegistry) -> None:
     )
     register(
         "github.select_projects",
-        "Select projects for article writing from the latest score snapshot.",
+        "从最新评分快照中选择用于文章写作的项目。",
         _schema(
             {
                 "article_top": {"type": "integer", "default": 3, "minimum": 1, "maximum": 20},
@@ -295,7 +295,7 @@ def _register_github_tools(registry: ToolRegistry) -> None:
     )
     register(
         "github.research_selected",
-        "Research selected GitHub repositories from arguments or the latest selection snapshot.",
+        "根据参数或最新选择快照调研已选 GitHub 项目。",
         _schema({"selected_repo_full_names": {"type": "array", "items": {"type": "string"}}}),
         ["writes workspace/snapshots/research_latest.json", "writes outputs/YYYY-MM-DD/research_notes.md"],
         _github_research_selected,
@@ -303,7 +303,7 @@ def _register_github_tools(registry: ToolRegistry) -> None:
     )
     register(
         "github.plan_content",
-        "Build content planning artifacts for researched GitHub projects.",
+        "为已调研的 GitHub 项目生成内容策划产物。",
         _schema(
             {
                 "top": {"type": "integer", "default": 3, "minimum": 1, "maximum": 20},
@@ -316,7 +316,7 @@ def _register_github_tools(registry: ToolRegistry) -> None:
     )
     register(
         "github.write_articles",
-        "Write GitHub project recommendation article drafts from latest planning/research snapshots.",
+        "根据最新策划和调研快照撰写 GitHub 项目推荐文章初稿。",
         _schema(
             {
                 "top": {"type": "integer", "default": 3, "minimum": 1, "maximum": 20},
@@ -329,7 +329,7 @@ def _register_github_tools(registry: ToolRegistry) -> None:
     )
     register(
         "github.review_articles",
-        "Review and revise latest GitHub project article drafts.",
+        "评审并修改最新的 GitHub 项目文章初稿。",
         _schema(
             {
                 "top": {"type": "integer", "default": 3, "minimum": 1, "maximum": 20},
@@ -343,7 +343,7 @@ def _register_github_tools(registry: ToolRegistry) -> None:
     )
     register(
         "github.package_articles",
-        "Package reviewed GitHub project articles with publish-ready Markdown and assets.",
+        "将已评审的 GitHub 项目文章打包为可发布的 Markdown 和素材。",
         _schema(
             {
                 "top": {"type": "integer", "default": 3, "minimum": 1, "maximum": 50},
@@ -357,7 +357,7 @@ def _register_github_tools(registry: ToolRegistry) -> None:
     )
     register(
         "github.write_custom_article",
-        "Write one complete GitHub project article for a specified repository URL.",
+        "根据指定仓库地址撰写一篇完整的 GitHub 项目文章。",
         _schema(
             {
                 "repo_url": {"type": "string"},
@@ -388,7 +388,7 @@ def _register_news_tools(registry: ToolRegistry) -> None:
                 input_schema=input_schema,
                 output_schema=output_schema,
                 side_effects=side_effects,
-                requires_confirmation=False,
+                requires_confirmation=name in {"news.write_article", "news.write_digest"},
                 tags=tags,
             ),
             handler,
@@ -396,7 +396,7 @@ def _register_news_tools(registry: ToolRegistry) -> None:
 
     register(
         "news.collect",
-        "Collect, normalize, dedupe, and optionally translate AI news.",
+        "采集、标准化、去重并按需翻译 AI 新闻。",
         _schema(
             {
                 "hours": {"type": "integer", "default": 24, "minimum": 1, "maximum": 336},
@@ -414,7 +414,7 @@ def _register_news_tools(registry: ToolRegistry) -> None:
     )
     register(
         "news.score",
-        "Score latest collected AI news for editorial value and sections.",
+        "根据编辑价值和栏目适配度为最新采集的 AI 新闻评分。",
         _schema(
             {
                 "top": {"type": "integer", "default": 20, "minimum": 1, "maximum": 100},
@@ -427,7 +427,7 @@ def _register_news_tools(registry: ToolRegistry) -> None:
     )
     register(
         "news.build_events",
-        "Merge latest scored AI news into event cards.",
+        "将最新评分后的 AI 新闻合并为事件卡片。",
         _schema(
             {
                 "top": {"type": "integer", "default": 20, "minimum": 1, "maximum": 100},
@@ -441,7 +441,7 @@ def _register_news_tools(registry: ToolRegistry) -> None:
     )
     register(
         "news.fetch_detail",
-        "Fetch and cache article detail for one news item.",
+        "获取并缓存一条新闻的文章详情。",
         _schema(
             {
                 "news_id": {"type": "string"},
@@ -455,7 +455,7 @@ def _register_news_tools(registry: ToolRegistry) -> None:
     )
     register(
         "news.select",
-        "Save selected AI news context for article planning.",
+        "保存已选择的 AI 新闻上下文，供文章策划使用。",
         _schema(
             {
                 "news_ids": {"type": "array", "items": {"type": "string"}},
@@ -471,7 +471,7 @@ def _register_news_tools(registry: ToolRegistry) -> None:
     )
     register(
         "news.plan_article",
-        "Plan a WeChat-style article from the latest or specified AI news selection.",
+        "根据最新或指定的 AI 新闻选题策划公众号风格文章。",
         _schema(
             {
                 "selection_id": {"type": "string"},
@@ -484,7 +484,7 @@ def _register_news_tools(registry: ToolRegistry) -> None:
     )
     register(
         "news.write_article",
-        "Write one AI news article from the latest or specified plan.",
+        "根据最新或指定的计划撰写一篇 AI 新闻文章。",
         _schema(
             {
                 "plan_id": {"type": "string"},
@@ -497,7 +497,7 @@ def _register_news_tools(registry: ToolRegistry) -> None:
     )
     register(
         "news.review_article",
-        "Review, optionally polish, and package the latest or specified AI news article.",
+        "评审、按需润色并打包最新或指定的 AI 新闻文章。",
         _schema(
             {
                 "article_id": {"type": "string"},
@@ -512,7 +512,7 @@ def _register_news_tools(registry: ToolRegistry) -> None:
     )
     register(
         "news.write_digest",
-        "Write an AI news digest from latest event cards.",
+        "根据最新事件卡片撰写 AI 新闻摘要。",
         _schema(
             {
                 "top": {"type": "integer", "default": 12, "minimum": 1, "maximum": 50},
@@ -525,7 +525,7 @@ def _register_news_tools(registry: ToolRegistry) -> None:
     )
     register(
         "news.review_digest",
-        "Review, optionally polish, and package the latest AI news digest.",
+        "评审、按需润色并打包最新的 AI 新闻摘要。",
         _schema(
             {
                 "threshold": {"type": "number", "default": 80, "minimum": 0, "maximum": 100},
@@ -544,7 +544,7 @@ def _github_discover(arguments: dict[str, Any]) -> dict[str, Any]:
         keywords=_clean_list(arguments.get("keywords")) or None,
     )
     return _handler_result(
-        f"Discovered {len(candidates)} GitHub repository candidates.",
+        f"发现了 {len(candidates)} 个 GitHub 候选项目。",
         _existing_artifacts(["workspace/snapshots/discovery_latest.json"]),
         {"candidate_count": len(candidates), "repositories": [item.full_name for item in candidates[:20]]},
     )
@@ -553,7 +553,7 @@ def _github_discover(arguments: dict[str, Any]) -> dict[str, Any]:
 def _github_score(arguments: dict[str, Any]) -> dict[str, Any]:
     scores = DailyOrchestrator().score(top=int(arguments.get("top") or 10))
     return _handler_result(
-        f"Scored {len(scores)} GitHub repositories.",
+        f"完成了 {len(scores)} 个 GitHub 项目的评分。",
         _existing_artifacts(["workspace/snapshots/score_latest.json", f"outputs/{_today()}/score_report.md"]),
         {"score_count": len(scores), "repositories": [item.full_name for item in scores[:20]]},
     )
@@ -569,7 +569,7 @@ def _github_select(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     selected = _clean_list((summary or {}).get("selected_repos"))
     return _handler_result(
-        f"Selected {len(selected)} GitHub projects for article writing.",
+        f"选择了 {len(selected)} 个 GitHub 项目用于文章写作。",
         _existing_artifacts(["workspace/snapshots/selection_latest.json"]),
         {"selected_count": len(selected), "selected_repos": selected, "candidate_count": (summary or {}).get("candidate_count", 0)},
         _clean_list((summary or {}).get("warnings")),
@@ -580,7 +580,7 @@ def _github_research_selected(arguments: dict[str, Any]) -> dict[str, Any]:
     selected = _clean_list(arguments.get("selected_repo_full_names")) or _latest_selected_repos()
     notes = DailyOrchestrator().research_selected(selected_repo_full_names=selected)
     return _handler_result(
-        f"Researched {len(notes)} selected GitHub projects.",
+        f"完成了 {len(notes)} 个已选 GitHub 项目的调研。",
         _existing_artifacts(["workspace/snapshots/research_latest.json", f"outputs/{_today()}/research_notes.md"]),
         {"note_count": len(notes), "selected_repo_full_names": selected, "repositories": [item.full_name for item in notes]},
     )
@@ -590,7 +590,7 @@ def _github_plan_content(arguments: dict[str, Any]) -> dict[str, Any]:
     selected = _clean_list(arguments.get("selected_repo_full_names")) or None
     plans = DailyOrchestrator().plan_content(top=int(arguments.get("top") or 3), selected_repo_full_names=selected)
     return _handler_result(
-        f"Generated {len(plans)} GitHub content planning artifacts.",
+        f"生成了 {len(plans)} 份 GitHub 项目内容策划。",
         _existing_artifacts(["workspace/snapshots/content_plan_latest.json", f"outputs/{_today()}/content_plan.md"]),
         {"plan_count": len(plans), "repositories": [str(item.get("repo_full_name") or item.get("full_name") or "") for item in plans[:20]]},
     )
@@ -598,10 +598,20 @@ def _github_plan_content(arguments: dict[str, Any]) -> dict[str, Any]:
 
 def _github_write_articles(arguments: dict[str, Any]) -> dict[str, Any]:
     selected = _clean_list(arguments.get("selected_repo_full_names")) or None
-    drafts = DailyOrchestrator().write_articles(top=int(arguments.get("top") or 3), selected_repo_full_names=selected)
+    orchestrator = DailyOrchestrator()
+    if selected:
+        orchestrator.plan_angles(top=len(selected), selected_repo_full_names=selected)
+    drafts = orchestrator.write_articles(top=int(arguments.get("top") or 3), selected_repo_full_names=selected)
     return _handler_result(
-        f"Wrote {len(drafts)} GitHub article drafts.",
-        _existing_artifacts(["workspace/snapshots/articles_latest.json", f"outputs/{_today()}/article_drafts.md"]),
+        f"撰写了 {len(drafts)} 篇 GitHub 项目文章初稿。",
+        _existing_artifacts(
+            [
+                "workspace/snapshots/angles_latest.json",
+                f"outputs/{_today()}/topic_angles.md",
+                "workspace/snapshots/articles_latest.json",
+                f"outputs/{_today()}/article_drafts.md",
+            ]
+        ),
         {"draft_count": len(drafts), "repositories": [item.repo_full_name for item in drafts], "titles": [item.title for item in drafts]},
     )
 
@@ -613,10 +623,19 @@ def _github_review_articles(arguments: dict[str, Any]) -> dict[str, Any]:
         threshold=float(arguments.get("threshold") if arguments.get("threshold") is not None else 80),
         selected_repo_full_names=selected,
     )
+    quality_scores = [float(item.quality_score or 0) for item in articles]
     return _handler_result(
-        f"Reviewed {len(articles)} GitHub final articles.",
+        f"评审了 {len(articles)} 篇 GitHub 项目文章终稿。",
         _existing_artifacts(["workspace/snapshots/final_articles_latest.json", f"outputs/{_today()}/final_articles_index.md"]),
-        {"article_count": len(articles), "repositories": [item.repo_full_name for item in articles], "titles": [item.title for item in articles]},
+        {
+            "article_count": len(articles),
+            "repositories": [item.full_name for item in articles],
+            "titles": [item.title for item in articles],
+            "minimum_quality_score": min(quality_scores) if quality_scores else 0,
+            "publish_ready_count": sum(
+                1 for item in articles if item.publish_ready and item.quality_publish_ready
+            ),
+        },
     )
 
 
@@ -629,7 +648,7 @@ def _github_package_articles(arguments: dict[str, Any]) -> dict[str, Any]:
     artifacts = [package.packaged_article_path for package in packages if package.packaged_article_path]
     artifacts.extend(["workspace/snapshots/article_packages_latest.json"])
     return _handler_result(
-        f"Packaged {len(packages)} GitHub articles.",
+        f"打包了 {len(packages)} 篇 GitHub 项目文章。",
         _existing_artifacts(artifacts),
         {
             "package_count": len(packages),
@@ -668,7 +687,7 @@ def _github_write_custom_article(arguments: dict[str, Any]) -> dict[str, Any]:
         ]
     )
     return _handler_result(
-        f"Wrote custom GitHub article for {result.get('full_name') or repo_url}.",
+        f"已为 {result.get('full_name') or repo_url} 生成指定 GitHub 项目文章。",
         artifacts,
         {
             "full_name": result.get("full_name"),
@@ -694,7 +713,7 @@ def _news_collect(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     generated_date = _date_from(result.generated_at)
     return _handler_result(
-        f"Collected {result.total_count} AI news items; {result.fresh_count} are within {result.window_hours}h.",
+        f"采集了 {result.total_count} 条 AI 新闻，其中 {result.fresh_count} 条发布于最近 {result.window_hours} 小时。",
         _existing_artifacts(
             [
                 "workspace/news/news_latest.json",
@@ -721,7 +740,7 @@ def _news_score(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     generated_date = _date_from(result.generated_at)
     return _handler_result(
-        f"Scored {result.total_count} AI news items; recommended {result.recommended_count}.",
+        f"完成了 {result.total_count} 条 AI 新闻的评分，推荐 {result.recommended_count} 条。",
         _existing_artifacts(
             [
                 "workspace/news/news_scores_latest.json",
@@ -747,7 +766,7 @@ def _news_build_events(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     generated_date = _date_from(result.generated_at)
     return _handler_result(
-        f"Built {result.event_count} AI news events; recommended {result.recommended_event_count}.",
+        f"构建了 {result.event_count} 个 AI 新闻事件，推荐 {result.recommended_event_count} 个。",
         _existing_artifacts(
             [
                 "workspace/news/news_events_latest.json",
@@ -772,7 +791,7 @@ def _news_fetch_detail(arguments: dict[str, Any]) -> dict[str, Any]:
     detail = service.get_detail(news_id=news_id, refresh=bool(arguments.get("refresh", False)))
     cache_path = service.cache_path_for(news_id).as_posix()
     return _handler_result(
-        f"Fetched detail for news item {detail.news_id}: {detail.content_availability}.",
+        f"已获取新闻 {detail.news_id} 的详情，内容可用性：{detail.content_availability}。",
         _existing_artifacts([cache_path]),
         {
             "news_id": detail.news_id,
@@ -799,7 +818,7 @@ def _news_select(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     context = service.save_selection(context)
     return _handler_result(
-        f"Saved AI news selection {context.selection_id} with {len(context.items)} items.",
+        f"已保存 AI 新闻选题 {context.selection_id}，包含 {len(context.items)} 条新闻。",
         _existing_artifacts(
             [
                 f"workspace/news/selections/{context.selection_id}.json",
@@ -821,7 +840,7 @@ def _news_plan_article(arguments: dict[str, Any]) -> dict[str, Any]:
     plan = service.plan_by_selection_id(selection_id) if selection_id else service.plan_latest()
     generated_date = _date_from(plan.generated_at)
     return _handler_result(
-        f"Generated AI news article plan {plan.plan_id}.",
+        f"已生成 AI 新闻文章计划 {plan.plan_id}。",
         _existing_artifacts(
             [
                 "workspace/news/news_article_plan_latest.json",
@@ -847,7 +866,7 @@ def _news_write_article(arguments: dict[str, Any]) -> dict[str, Any]:
     article = service.write_by_plan_id(plan_id) if plan_id else service.write_latest()
     generated_date = _date_from(article.generated_at)
     return _handler_result(
-        f"Wrote AI news article {article.article_id}.",
+        f"已撰写 AI 新闻文章 {article.article_id}。",
         _existing_artifacts(
             [
                 "workspace/news/news_article_latest.json",
@@ -899,7 +918,7 @@ def _news_review_article(arguments: dict[str, Any]) -> dict[str, Any]:
     evaluator.save_report(article, report)
     generated_date = _date_from(article.generated_at)
     return _handler_result(
-        f"Reviewed AI news article {article.article_id}; score {report.total_score:.1f}.",
+        f"已评审 AI 新闻文章 {article.article_id}，得分 {report.total_score:.1f}。",
         _existing_artifacts(
             [
                 "workspace/news/news_article_review_latest.json",
@@ -928,7 +947,7 @@ def _news_write_digest(arguments: dict[str, Any]) -> dict[str, Any]:
         date=str(arguments.get("date")).strip() if arguments.get("date") else None,
     )
     return _handler_result(
-        f"Wrote AI news digest with {result.event_count} events.",
+        f"已撰写包含 {result.event_count} 个事件的 AI 新闻摘要。",
         _existing_artifacts(
             [
                 "workspace/news/news_digest_latest.json",
@@ -972,7 +991,7 @@ def _news_review_digest(arguments: dict[str, Any]) -> dict[str, Any]:
     evaluator.save_report(article, report)
     package_path = article.package_path or f"outputs/{article.date}/news_digest_package/packaged_ai_news_digest.md"
     return _handler_result(
-        f"Reviewed AI news digest for {article.date}; score {report.total_score:.1f}.",
+        f"已评审 {article.date} 的 AI 新闻摘要，得分 {report.total_score:.1f}。",
         _existing_artifacts(
             [
                 "workspace/news/news_digest_review_latest.json",

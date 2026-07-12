@@ -109,15 +109,135 @@ python3 main.py build-news-events --top 20 --min-score 60 --similarity-threshold
 python3 main.py write-news-digest --top 12
 python3 main.py review-news-digest --threshold 80 --polish
 python3 main.py run-daily --limit-per-keyword 3 --score-top 10 --research-top 3 --article-top 3
+python3 main.py agent-run start --goal "帮我写一篇今天 AI 圈新闻公众号文章"
+python3 main.py agent-run start --goal "帮我写 https://github.com/sharkdp/bat 的公众号文章"
+python3 main.py agent-run latest
+python3 main.py build-content-index
+python3 main.py build-content-index --date 2026-07-12 --no-agent-artifacts
 python3 main.py schedule --time 09:00
 python3 main.py schedule --time 09:00 --run-once-first
 ```
 
 `articles` 是 `write-articles` 的兼容别名。`write --repo owner/name` 仍是早期占位命令，不属于当前日报主流程。
 
-### Agent Tools
+### Content Index
 
-项目内的 `skills/github-project-article` 和 `skills/ai-news-article` 描述了 Agent 可选择的内容生产 skill；Agent Tools 是 skill 到实际本地能力之间的中间层，把现有 CLI / service 能力注册成统一的 `ToolRegistry`。本步骤只支持工具注册、本地同步调用和调用结果落盘，还没有 Supervisor Planner，也没有自动选择 skill 的 LLM Planner。
+`build-content-index` 会把 GitHub 日常终稿、指定项目文章、AI 新闻单篇文章、AI 日报、人工修改版和可识别的 Agent Markdown 产物整理成统一 `ContentIndex`。索引保留 source、publish、package、report 四种 Markdown 路径以及质量分、发布状态、来源标识和 Agent run 关联，不会删除或替代旧快照与旧 API。
+
+```bash
+python3 main.py build-content-index
+python3 main.py build-content-index --date YYYY-MM-DD
+python3 main.py build-content-index --no-agent-artifacts
+```
+
+默认输出：
+
+```text
+workspace/content/content_index_latest.json
+workspace/snapshots/content_index_latest.json
+outputs/YYYY-MM-DD/content_index_report.md
+```
+
+Agent run 中的 artifact path 如果与已有文章的 source、publish、package 或 report 路径一致，会写入该文章的 `agent_run_id`，不会重复创建内容项；无法归类但符合文章特征的 Markdown 会作为 `agent_artifact` 收录。索引中的 Markdown 读取严格限制在项目的 `outputs/` 和 `workspace/` 目录内。
+
+内容库提供统一内容详情与 Markdown 编辑器，可在 source、publish、package、report 和 manual 版本间预览，并对比 AI 版本与人工修改版。人工修改不会覆盖 AI 原文：正文保存到 `outputs/YYYY-MM-DD/manual_edits/{content_id_safe}.md`，元数据保存到 `workspace/manual_edits/{content_id_safe}.json`，汇总记录位于 `workspace/manual_edits/index.json`。保存或删除后前端会重建 Content Index，原 ContentItem 会记录 `has_manual_edit`、`manual_edit_path` 和 `manual_edit_updated_at`。人工修改版还可以写入或更新该内容的发布包。
+
+### Publishing Desk
+
+前端侧边栏的 **发布工作台 / Publishing Desk** 是内容生成后的发布前最后一站。它统一展示 GitHub 项目文章、指定项目文章、AI 新闻文章、AI 日报与 Agent 文章型产物，支持按内容类型、发布状态、人工修改、发布包、可发布状态和标题筛选；可打开统一详情、进入编辑、查看发布稿或发布包、用人工版生成发布包，并跳转到内容库。
+
+`ContentIndexService` 在每次构建索引时计算 `readiness_status`、`readiness_reasons` 和 `next_actions`。主状态规则如下：
+
+- `ready`：`publish_ready=true`，存在 source 或 publish Markdown，存在 package，且没有 high/critical 类 warning。
+- `missing_content`：source 与 publish Markdown 都不存在。
+- `quality_low`：存在质量分且低于 80。
+- `needs_package`：已有文章 Markdown，但缺少 package。
+- `needs_review`：缺少质量分或 report。
+- `needs_manual_edit`：存在需要处理的明显 warning；低质量内容也会在 `next_actions` 中建议人工修改。
+- `unknown`：现有元数据不足以判断。
+
+索引和发布工作台同时统计 `ready_count`、`needs_package_count`、`quality_low_count`、`needs_review_count`、`manual_edit_count` 和 `packaged_count`。统计项按各自条件独立计算，因此一篇文章可能同时计入“待评估”和“待打包”，但只会有一个主 `readiness_status`。
+
+发布工作台只做发布前准备，**不连接微信公众号 API，也不会真正发布内容**。单篇“导出发布 Markdown”按 manual、publish、package、source 的顺序选择最佳可用版本，并显示实际版本、原文链接数量、发布包状态和 warning 数量。批量“导出可发布内容索引 Markdown”会下载 ready 内容的标题、Content ID、最佳版本、质量分、包路径和来源链接。
+
+缺少发布包时，可先保存人工修改版，再使用“用人工版生成发布包”或批量“为缺少发布包内容生成发布包”。当前批量打包只自动处理已有人工修改版的内容，其他内容会返回 warning；质量低内容应先查看质量报告、完成人工修改并重新评估。
+
+发布工作台 API：
+
+```text
+GET  /api/publishing/desk
+POST /api/publishing/rebuild
+POST /api/publishing/package-missing
+GET  /api/publishing/export/{content_id}
+```
+
+### Agent Runtime
+
+项目内的 `skills/github-project-article` 和 `skills/ai-news-article` 描述了 Agent 可选择的内容生产 skill；skills 文档是 Agent 选择和工具链编排的规范来源。Agent Tools 是 skill 到实际本地能力之间的中间层，把现有 CLI / service 能力注册成统一的 `ToolRegistry`。
+
+Agent Runtime 接收用户 `goal`，由 `AgentPlanner` 用 deterministic 规则选择 skill 并生成工具计划。`AgentRuntime` 执行每一步后调用 deterministic `AgentReflector`，把 observation、artifacts、reflection 和恢复决策持久化到 `workspace/agent_runs`。当前 planner 和 reflection 均不依赖 LLM，也不做无限自主循环或多 Agent 编排。
+
+Reflection 当前支持的有限自我修正包括：新闻过少时把采集窗口扩大到 72 小时并把 limit 提高到 100；推荐新闻或事件过少时把阈值降低到 40；新闻文章质量不足时自动 review/polish；GitHub 候选不足时扩大搜索，选择不足且用户未明确要求“不重复”时允许近期项目补位；文章质量不足时复审；发布包路径缺失时自动重试一次。网络或限流错误会在存在旧快照时降级复用，否则最多重试一次；参数错误和缺少必要输入会直接标记为不可恢复。
+
+每个 run 默认最多执行 3 次 recovery action。达到 `max_recovery_count` 后只记录 warning，不再插入补救步骤，从机制上避免无限循环。
+
+Web 前端侧边栏的 **Agent 控制台** 用于输入目标并观察 skill 选择、执行计划、当前工具、步骤 observation、reflection/recovery 和最终 artifacts。页面每 2 秒轮询活动 run；API 与前端默认关闭自动批准，执行到受控写作工具时会进入 `needs_input`，用户可批准后继续或拒绝并终止。
+
+当前 Human Approval 是第一版 tool-level approval：不支持审批时编辑工具参数，也不包含多用户权限或多人协作。默认需要确认的工具为 `github.write_articles`、`github.write_custom_article`、`news.write_article` 和 `news.write_digest`。
+
+启动 Agent Run：
+
+```bash
+python3 main.py agent-run start --goal "帮我写一篇今天 AI 圈新闻公众号文章"
+python3 main.py agent-run start --goal "帮我写 https://github.com/sharkdp/bat 的公众号文章，从程序员日常使用体验写"
+python3 main.py agent-run start --goal "帮我自动发现 GitHub 开源项目并生成 3 篇公众号文章"
+python3 main.py agent-run start --goal "帮我写一篇今天 AI 圈新闻公众号文章" --max-recovery-count 3
+python3 main.py agent-run start --goal "帮我写一篇今天 AI 圈新闻公众号文章" --no-reflection
+python3 main.py agent-run start --goal "帮我写 https://github.com/sharkdp/bat 的公众号文章" --no-auto-approve
+```
+
+CLI 默认为 `--auto-approve`，避免非交互命令被审批中断；使用 `--no-auto-approve` 可在受控工具前暂停。批准只记录决定，随后需要显式 resume：
+
+```bash
+python3 main.py agent-run approve --run-id <run_id>
+python3 main.py agent-run reject --run-id <run_id> --notes "不生成这篇文章"
+python3 main.py agent-run resume --run-id <run_id>
+```
+
+API 与前端默认 `auto_approve=false`。对应接口为：
+
+```text
+POST /api/agent/runs
+GET  /api/agent/runs/latest
+GET  /api/agent/runs/{run_id}
+POST /api/agent/runs/{run_id}/approve
+POST /api/agent/runs/{run_id}/resume
+```
+
+`approve` 请求体为 `{"approved": true|false, "notes": "optional"}`。批准后调用 `resume` 继续；拒绝后 run 进入 `failed`，审批决定保存在 `approval_history`。
+
+查看 Agent Run：
+
+```bash
+python3 main.py agent-run latest
+python3 main.py agent-run show --run-id <run_id>
+```
+
+运行状态会保存为：
+
+```text
+workspace/agent_runs/{run_id}.json
+workspace/agent_runs/latest_agent_run.json
+```
+
+deterministic planner 当前规则：
+
+- 包含 GitHub URL 或 `github.com`：选择 `github-project-article`，执行 `github.write_custom_article`。
+- 包含“AI 新闻”“新闻日报”“AI 圈新闻”“今日 AI”：选择 `ai-news-article`，执行 `news.collect -> news.score -> news.build_events -> news.write_digest -> news.review_digest`。
+- 包含“开源项目”“GitHub 项目”“项目日报”“自动发现”：选择 `github-project-article`，执行 `github.discover_projects -> github.score_projects -> github.select_projects -> github.research_selected -> github.plan_content -> github.write_articles -> github.review_articles -> github.package_articles`。
+- 无法判断时生成 `unknown_goal` warning，不执行工具，并把 run 标记为 `needs_input`。
+
+### Agent Tools
 
 查看工具：
 
@@ -148,7 +268,12 @@ workspace/agent_tool_calls/latest_tool_call.json
 ```text
 GET /api/agent/tools
 POST /api/agent/tools/call
+POST /api/agent/runs
+GET /api/agent/runs/latest
+GET /api/agent/runs/{run_id}
 ```
+
+`POST /api/agent/runs` 可传 `max_recovery_count`（默认 `3`）与 `reflection_enabled`（默认 `true`）；GET 返回完整 `reflections`、`recovery_count` 和动态调整后的 plan。
 
 ### AI 新闻采集
 
@@ -742,6 +867,15 @@ POST /api/run-daily/async
 GET  /api/jobs
 GET  /api/jobs/{job_id}
 GET  /api/jobs/{job_id}/events
+GET  /api/content
+POST /api/content/rebuild
+GET  /api/content/{content_id}
+GET  /api/content/{content_id}/markdown?variant=source|publish|package|report
+GET  /api/content/report
+GET  /api/content/{content_id}/manual-edit
+PUT  /api/content/{content_id}/manual-edit
+DELETE /api/content/{content_id}/manual-edit
+POST /api/content/{content_id}/package-from-manual
 ```
 
 ### 实时运行进度
@@ -786,6 +920,26 @@ Web 控制台的 Settings 页面会通过 `workspace/ui_settings.json` 保存非
 ## React Web 控制台
 
 React 控制台位于 `frontend/`，默认连接本地 FastAPI：
+
+### 前端信息架构与统一 Content Index
+
+前端现已按内容生产流程整理为三个工作区，并增加统一的内容库入口：
+
+- **GitHub 项目文章**：项目文章与项目发布包主列表读取统一 Content Index，覆盖 `github_article` 和 `github_custom_article`，可直接打开原文、发布包、报告并跳转内容库；旧文章接口继续保留作为兼容能力。
+- **AI 新闻文章**：新闻文章与 AI 日报主列表分别读取 Content Index 中的 `ai_news_article` 和 `ai_news_digest`，统一展示质量、发布状态、来源与发布包，并复用原有生成操作。
+- **Agent 控制台**：Agent 工作台读取最新 run，并按 `agent_run_id` 或 artifact path 自动关联 content item；产物页分别展示原始 artifacts、已关联内容与未识别产物，并汇总可发布和已打包数量。
+- **内容库**：直接读取 `GET /api/content` 统一索引，提供全部、GitHub 项目文章、AI 新闻文章、AI 日报、Agent 产物和人工修改版分类，并支持标题搜索、类型/状态/来源/可发布筛选、概览统计和索引重建。
+- **统一预览与双向跳转**：三大工作区和内容库复用同一个 Content Preview，可按实际可用 variant 查看原文、发布稿、发布包和报告，支持复制、下载与图片路径解析。工作区携带 `content_id + variant` 跳转内容库后会自动打开对应内容。
+
+旧的文章、新闻和 Agent API 继续保留，但三大工作区的内容主展示已经切换到统一 Content Index，为后续人工编辑、发布管理和搜索联动提供稳定的数据层。
+
+### 生成后自动同步内容库
+
+GitHub 日报、指定项目文章、文章发布包、AI 新闻文章、AI 日报以及成功完成的 Agent run 在生成内容后，会自动调用 `POST /api/content/rebuild` 并刷新 `GET /api/content`。因此新文章、发布稿和发布包会直接出现在内容库及所属工作区中，不再需要用户手动刷新页面或重建索引。
+
+前端会按产物路径、`agent_run_id`、GitHub 仓库名、新闻文章 ID 和内容类型依次定位新内容；能够唯一定位时会按生成动作打开原文、发布稿或发布包，无法定位时只显示提示，生成结果本身仍视为成功。Agent run 完成后也会自动尝试把 Markdown artifacts 关联到内容库，并在 Agent 产物页提供“在内容库打开”入口。
+
+内容库中的手动“重建索引”按钮仍然保留，用于纳入旧产物、外部文件变更，或修复历史索引状态。
 
 ```text
 http://127.0.0.1:8000

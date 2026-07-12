@@ -7,7 +7,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from src.agent_models import AgentRun
+from src.agent_runtime import AgentRuntime
 from src.agent_tools import build_default_tool_registry
+from src.content_index import ContentIndexService
 from src.news_collector import NewsCollectorService
 from src.news_detail_service import NewsDetailService
 from src.news_article_writer import NewsArticleWriterService
@@ -484,6 +487,65 @@ def _print_agent_tool_result(result) -> None:
             print(f"- {warning}")
 
 
+def _print_agent_run(run: AgentRun) -> None:
+    print(f"run_id: {run.run_id}")
+    print(f"skill_name: {run.skill_name or '-'}")
+    print(f"status: {run.status}")
+    print(f"reflection_enabled: {'true' if run.reflection_enabled else 'false'}")
+    print(f"recovery_count: {run.recovery_count}/{run.max_recovery_count}")
+    print(f"reflections: {len(run.reflections)}")
+    print(f"auto_approve: {'true' if run.auto_approve else 'false'}")
+    print(f"pending_approval_step_id: {run.pending_approval_step_id or '-'}")
+    if run.approval_prompt:
+        print(f"approval_prompt: {run.approval_prompt}")
+    print(f"approval_history: {len(run.approval_history)}")
+    for reflection in run.reflections:
+        print(f"- {reflection.reflection_id} {reflection.status}: {reflection.decision}")
+    print("steps:")
+    for step in run.plan.steps:
+        print(f"- {step.step_id} {step.tool_name}: {step.status}")
+        if step.observation:
+            print(f"  observation: {step.observation}")
+        if step.error:
+            print(f"  error: {step.error}")
+    if not run.plan.steps:
+        print("-")
+    print("artifacts:")
+    for artifact in run.artifacts:
+        print(f"- {artifact}")
+    if not run.artifacts:
+        print("-")
+    if run.error:
+        print(f"error: {run.error}")
+    if run.warnings:
+        print("warnings:")
+        for warning in run.warnings[:10]:
+            print(f"- {warning}")
+
+
+def _run_build_content_index_command(date: str | None = None, include_agent_artifacts: bool = True):
+    service = ContentIndexService()
+    index = service.build_index(date=date, include_agent_artifacts=include_agent_artifacts)
+    print(f"total_count: {index.total_count}")
+    print("type_counts:")
+    for content_type, count in index.type_counts.items():
+        print(f"- {content_type}: {count}")
+    print("publishing_counts:")
+    for key in (
+        "ready_count",
+        "needs_package_count",
+        "quality_low_count",
+        "needs_review_count",
+        "manual_edit_count",
+        "packaged_count",
+    ):
+        print(f"- {key}: {getattr(index, key)}")
+    print(f"index_path: {service.index_path.relative_to(service.project_root).as_posix()}")
+    if service.report_path:
+        print(f"report_path: {service.report_path.relative_to(service.project_root).as_posix()}")
+    return index
+
+
 def _schedule_daily(
     run_time: str = "09:00",
     limit_per_keyword: int = 5,
@@ -541,7 +603,9 @@ def _schedule_daily(
 if typer is not None:
     app = typer.Typer(help="GitHubRadarAgent CLI")
     agent_tools_app = typer.Typer(help="List and call registered Agent Tools.")
+    agent_run_app = typer.Typer(help="Start and inspect Agent Runs.")
     app.add_typer(agent_tools_app, name="agent-tools")
+    app.add_typer(agent_run_app, name="agent-run")
 
 
     @agent_tools_app.command("list")
@@ -572,6 +636,84 @@ if typer is not None:
             raise typer.BadParameter(str(exc)) from exc
         result = build_default_tool_registry().call(tool_name, arguments)
         _print_agent_tool_result(result)
+
+
+    @agent_run_app.command("start")
+    def agent_run_start(
+        goal: str = typer.Option(
+            ...,
+            "--goal",
+            help="User goal for the Agent Runtime.",
+        ),
+        max_recovery_count: int = typer.Option(
+            3,
+            "--max-recovery-count",
+            min=0,
+            help="Maximum number of deterministic recovery actions.",
+        ),
+        no_reflection: bool = typer.Option(
+            False,
+            "--no-reflection",
+            help="Disable post-step reflection and recovery.",
+        ),
+        auto_approve: bool = typer.Option(
+            True,
+            "--auto-approve/--no-auto-approve",
+            help="Automatically approve tools that require confirmation.",
+        ),
+    ) -> None:
+        """Create and execute an Agent Run synchronously."""
+        run = AgentRuntime().run_goal(
+            goal,
+            max_recovery_count=max_recovery_count,
+            reflection_enabled=not no_reflection,
+            auto_approve=auto_approve,
+        )
+        _print_agent_run(run)
+
+
+    @agent_run_app.command("show")
+    def agent_run_show(
+        run_id: str = typer.Option(
+            ...,
+            "--run-id",
+            help="Agent Run id from workspace/agent_runs.",
+        ),
+    ) -> None:
+        """Show one Agent Run."""
+        run = AgentRuntime().load_run(run_id)
+        _print_agent_run(run)
+
+
+    @agent_run_app.command("latest")
+    def agent_run_latest() -> None:
+        """Show the latest Agent Run."""
+        run = AgentRuntime().load_latest_run()
+        _print_agent_run(run)
+
+
+    @agent_run_app.command("approve")
+    def agent_run_approve(
+        run_id: str = typer.Option(..., "--run-id"),
+        notes: Optional[str] = typer.Option(None, "--notes"),
+    ) -> None:
+        """Approve the pending tool step without executing it."""
+        _print_agent_run(AgentRuntime().approve_run(run_id, approved=True, notes=notes))
+
+
+    @agent_run_app.command("reject")
+    def agent_run_reject(
+        run_id: str = typer.Option(..., "--run-id"),
+        notes: Optional[str] = typer.Option(None, "--notes"),
+    ) -> None:
+        """Reject the pending tool step and fail the run."""
+        _print_agent_run(AgentRuntime().approve_run(run_id, approved=False, notes=notes))
+
+
+    @agent_run_app.command("resume")
+    def agent_run_resume(run_id: str = typer.Option(..., "--run-id")) -> None:
+        """Continue a run after its pending step has been approved."""
+        _print_agent_run(AgentRuntime().resume_run(run_id))
 
 
     @app.command("run-daily")
@@ -628,6 +770,22 @@ if typer is not None:
             ignore_history=ignore_history,
             allow_recent_fallback=allow_recent_fallback,
         )
+
+
+    @app.command("build-content-index")
+    def build_content_index(
+        date: Optional[str] = typer.Option(None, "--date", help="Only scan outputs for YYYY-MM-DD."),
+        include_agent_artifacts: bool = typer.Option(
+            True,
+            "--include-agent-artifacts/--no-agent-artifacts",
+            help="Associate and index article-like Agent artifacts.",
+        ),
+    ) -> None:
+        """Build the unified article and publishing artifact index."""
+        try:
+            _run_build_content_index_command(date=date, include_agent_artifacts=include_agent_artifacts)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
 
 
     @app.command("schedule")
@@ -1127,6 +1285,25 @@ def _run_with_argparse(argv: Optional[list[str]] = None) -> None:
     run_daily_parser.add_argument("--ignore-history", action="store_true")
     run_daily_parser.add_argument("--allow-recent-fallback", action="store_true")
 
+    content_index_parser = subparsers.add_parser(
+        "build-content-index",
+        help="Build the unified article and publishing artifact index.",
+    )
+    content_index_parser.add_argument("--date", default=None, help="Only scan outputs for YYYY-MM-DD.")
+    content_index_parser.add_argument(
+        "--include-agent-artifacts",
+        dest="include_agent_artifacts",
+        action="store_true",
+        help="Associate and index article-like Agent artifacts.",
+    )
+    content_index_parser.add_argument(
+        "--no-agent-artifacts",
+        dest="include_agent_artifacts",
+        action="store_false",
+        help="Skip Agent artifact association and discovery.",
+    )
+    content_index_parser.set_defaults(include_agent_artifacts=True)
+
     schedule_parser = subparsers.add_parser(
         "schedule",
         help="Run the daily workflow in a local long-running scheduler process.",
@@ -1494,10 +1671,35 @@ def _run_with_argparse(argv: Optional[list[str]] = None) -> None:
     agent_tools_call_parser.add_argument("tool_name", help="Registered tool name.")
     agent_tools_call_parser.add_argument("--args-json", default="{}", help="Tool arguments as a JSON object.")
 
+    agent_run_parser = subparsers.add_parser("agent-run", help="Start or inspect Agent Runs.")
+    agent_run_subparsers = agent_run_parser.add_subparsers(dest="agent_run_command", required=True)
+    agent_run_start_parser = agent_run_subparsers.add_parser("start", help="Create and execute an Agent Run.")
+    agent_run_start_parser.add_argument("--goal", required=True, help="User goal for the Agent Runtime.")
+    agent_run_start_parser.add_argument("--max-recovery-count", type=int, default=3, help="Maximum recovery actions.")
+    agent_run_start_parser.add_argument("--no-reflection", action="store_true", help="Disable reflection and recovery.")
+    agent_run_start_parser.add_argument("--auto-approve", dest="auto_approve", action="store_true", default=True)
+    agent_run_start_parser.add_argument("--no-auto-approve", dest="auto_approve", action="store_false")
+    agent_run_show_parser = agent_run_subparsers.add_parser("show", help="Show one Agent Run.")
+    agent_run_show_parser.add_argument("--run-id", required=True, help="Agent Run id from workspace/agent_runs.")
+    agent_run_subparsers.add_parser("latest", help="Show the latest Agent Run.")
+    agent_run_approve_parser = agent_run_subparsers.add_parser("approve", help="Approve a pending Agent step.")
+    agent_run_approve_parser.add_argument("--run-id", required=True)
+    agent_run_approve_parser.add_argument("--notes", default=None)
+    agent_run_reject_parser = agent_run_subparsers.add_parser("reject", help="Reject a pending Agent step.")
+    agent_run_reject_parser.add_argument("--run-id", required=True)
+    agent_run_reject_parser.add_argument("--notes", default=None)
+    agent_run_resume_parser = agent_run_subparsers.add_parser("resume", help="Resume an approved Agent run.")
+    agent_run_resume_parser.add_argument("--run-id", required=True)
+
     args = parser.parse_args(argv)
     orchestrator = DailyOrchestrator()
 
-    if args.command == "agent-tools":
+    if args.command == "build-content-index":
+        _run_build_content_index_command(
+            date=args.date,
+            include_agent_artifacts=args.include_agent_artifacts,
+        )
+    elif args.command == "agent-tools":
         if args.agent_tools_command == "list":
             _print_agent_tools(skill_name=args.skill)
         elif args.agent_tools_command == "call":
@@ -1507,6 +1709,28 @@ def _run_with_argparse(argv: Optional[list[str]] = None) -> None:
                 raise SystemExit(str(exc)) from exc
             result = build_default_tool_registry().call(args.tool_name, arguments)
             _print_agent_tool_result(result)
+    elif args.command == "agent-run":
+        runtime = AgentRuntime()
+        if args.agent_run_command == "start":
+            run = runtime.run_goal(
+                args.goal,
+                max_recovery_count=max(0, args.max_recovery_count),
+                reflection_enabled=not args.no_reflection,
+                auto_approve=args.auto_approve,
+            )
+            _print_agent_run(run)
+        elif args.agent_run_command == "show":
+            run = runtime.load_run(args.run_id)
+            _print_agent_run(run)
+        elif args.agent_run_command == "latest":
+            run = runtime.load_latest_run()
+            _print_agent_run(run)
+        elif args.agent_run_command == "approve":
+            _print_agent_run(runtime.approve_run(args.run_id, approved=True, notes=args.notes))
+        elif args.agent_run_command == "reject":
+            _print_agent_run(runtime.approve_run(args.run_id, approved=False, notes=args.notes))
+        elif args.agent_run_command == "resume":
+            _print_agent_run(runtime.resume_run(args.run_id))
     elif args.command == "run-daily":
         orchestrator.run_daily(
             limit_per_keyword=args.limit_per_keyword,

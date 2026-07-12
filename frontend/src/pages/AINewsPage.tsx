@@ -42,6 +42,7 @@ import {
 import { copyText, downloadMarkdown } from "../fileUtils";
 import type { Translation } from "../i18n";
 import { markdownImageSrc } from "../markdownImages";
+import { useContentIndexData } from "../hooks/useContentIndexData";
 import type {
   NewsCollectRequest,
   NewsArticle,
@@ -64,7 +65,10 @@ import { asArray, formatDate } from "./pageUtils";
 
 type AINewsPageProps = {
   t: Translation;
+  view?: AINewsView;
 };
+
+export type AINewsView = "legacy" | "workbench" | "collect" | "list" | "detail" | "selection" | "plan" | "articles" | "digest" | "reports";
 
 type NewsFilters = {
   source: string;
@@ -438,7 +442,16 @@ function newsArticleQualityToMarkdown(article: NewsArticle, report: NewsArticleQ
   ].join("\n");
 }
 
-export function AINewsPage({ t }: AINewsPageProps) {
+const tabForView = (view: AINewsView): NewsTab => {
+  if (view === "plan") return "articlePlan";
+  if (view === "articles") return "article";
+  if (view === "digest") return "digest";
+  if (view === "collect" || view === "reports") return "collectionReport";
+  return "list";
+};
+
+export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
+  const contentIndex = useContentIndexData();
   const [news, setNews] = useState<NewsCollectionResult>(() => emptyNewsResult());
   const [scores, setScores] = useState<NewsScoringResult>(() => emptyScoringResult());
   const [events, setEvents] = useState<NewsEventResult>(() => emptyEventResult());
@@ -478,7 +491,11 @@ export function AINewsPage({ t }: AINewsPageProps) {
   const [error, setError] = useState("");
   const [reportError, setReportError] = useState("");
   const [message, setMessage] = useState("");
-  const [activeTab, setActiveTab] = useState<NewsTab>("list");
+  const [activeTab, setActiveTab] = useState<NewsTab>(() => tabForView(view));
+
+  useEffect(() => {
+    if (view !== "legacy") setActiveTab(tabForView(view));
+  }, [view]);
   const [hours, setHours] = useState(24);
   const [limit, setLimit] = useState(50);
   const [includeFulltext, setIncludeFulltext] = useState(false);
@@ -1120,6 +1137,9 @@ export function AINewsPage({ t }: AINewsPageProps) {
       setDigestPackage("");
       setDigestPackagePath("");
       await loadDigest();
+      await contentIndex.handleContentMutationSuccess(payload as unknown as Record<string, unknown>, {
+        contentTypes: ["ai_news_digest"], digest: true, preferredVariant: "source", openAfterSync: true,
+      });
       setActiveTab("digest");
       flash(t.news.digestWriteSuccess);
     } catch (err) {
@@ -1147,6 +1167,9 @@ export function AINewsPage({ t }: AINewsPageProps) {
       });
       setDigestReview(payload.quality_report || null);
       await Promise.all([loadDigest(), loadDigestReview(), loadDigestPackage()]);
+      await contentIndex.handleContentMutationSuccess(payload as unknown as Record<string, unknown>, {
+        contentTypes: ["ai_news_digest"], digest: true, preferredVariant: payload.package_path ? "package" : "publish", openAfterSync: true,
+      });
       setActiveTab("digest");
       flash(t.news.digestReviewSuccess);
     } catch (err) {
@@ -1275,6 +1298,9 @@ export function AINewsPage({ t }: AINewsPageProps) {
       setNewsArticle(normalizedArticle);
       setSelectedNewsArticleId(normalizedArticle.article_id || "");
       await Promise.all([loadNewsArticles(), loadNewsArticle(normalizedArticle.article_id)]);
+      await contentIndex.handleContentMutationSuccess(payload as unknown as Record<string, unknown>, {
+        contentTypes: ["ai_news_article"], newsArticleId: normalizedArticle.article_id, preferredVariant: "source", openAfterSync: true,
+      });
       setArticlePreviewMode("article");
       setActiveTab("article");
       flash(t.news.articleGenerated);
@@ -1304,6 +1330,9 @@ export function AINewsPage({ t }: AINewsPageProps) {
       setNewsArticle(normalizedArticle);
       setNewsArticleReview(qualityReport);
       await Promise.all([loadNewsArticles(), loadNewsArticle(normalizedArticle.article_id || newsArticle.article_id)]);
+      await contentIndex.handleContentMutationSuccess(payload as unknown as Record<string, unknown>, {
+        contentTypes: ["ai_news_article"], newsArticleId: normalizedArticle.article_id || newsArticle.article_id, preferredVariant: "publish", openAfterSync: true,
+      });
       setArticlePreviewMode("publish");
       setActiveTab("article");
       flash(t.news.articleReviewSuccess);
@@ -1354,8 +1383,8 @@ export function AINewsPage({ t }: AINewsPageProps) {
   };
 
   return (
-    <div className="page-stack ai-news-page">
-      <section className="panel page-panel">
+    <div className={`page-stack ai-news-page ai-news-view-${view}`}>
+      <section className="panel page-panel news-overview-panel">
         <div className="panel-header page-header">
           <div>
             <h2>{t.news.latestTitle}</h2>
@@ -1452,7 +1481,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
         </div>
       </section>
 
-      <section className="panel page-panel">
+      <section className="panel page-panel news-collection-panel">
         <div className="panel-header">
           <h2>{t.news.collectionControls}</h2>
           <button className="primary-button" type="button" onClick={handleCollect} disabled={collecting}>
@@ -1503,7 +1532,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
         </div>
       </section>
 
-      <section className="panel page-panel">
+      <section className="panel page-panel news-scoring-panel">
         <div className="panel-header">
           <h2>{t.news.scoringControls}</h2>
           <button className="primary-button" type="button" onClick={handleScoreNews} disabled={scoring || !items.length}>
@@ -1541,7 +1570,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
         ) : null}
       </section>
 
-      <section className="panel page-panel">
+      <section className="panel page-panel news-events-control-panel">
         <div className="panel-header">
           <h2>{t.news.eventBuildControls}</h2>
           <button className="primary-button" type="button" onClick={handleBuildEvents} disabled={buildingEvents || !scoreItems.length}>
@@ -1590,7 +1619,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
         ) : null}
       </section>
 
-      <section className="panel page-panel">
+      <section className="panel page-panel news-article-control-panel">
         <div className="panel-header">
           <h2>{t.news.articleWritingControls}</h2>
           <div className="button-row">
@@ -1643,7 +1672,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
         {!articlePlan.plan_id ? <p className="empty-state">{t.news.noArticleGeneratePlanFirst}</p> : null}
       </section>
 
-      <section className="panel page-panel">
+      <section className="panel page-panel news-digest-control-panel">
         <div className="panel-header">
           <h2>{t.news.digestControls}</h2>
           <div className="button-row">
@@ -1709,7 +1738,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
         ) : null}
       </section>
 
-      <section className="panel page-panel">
+      <section className="panel page-panel news-filter-panel">
         <div className="panel-header">
           <h2>{t.news.filters}</h2>
           <Filter size={18} aria-hidden="true" />
@@ -1841,7 +1870,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
       </div>
 
       {activeTab === "list" || activeTab === "recommended" ? (
-      <section className="news-list-detail-layout">
+      <section className="news-list-detail-layout news-list-panel">
         <div className="panel page-panel news-list-panel">
           <div className="panel-header">
             <h2>{activeTab === "recommended" ? t.news.recommendedNews : t.news.newsList}</h2>
@@ -2109,7 +2138,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
       ) : null}
 
       {activeTab === "events" ? (
-      <section className="panel page-panel">
+      <section className="panel page-panel news-events-panel">
         <div className="panel-header">
           <h2>{t.news.eventCard}</h2>
           <span className="soft-badge unknown">{`${filteredEvents.length}/${eventItems.length}`}</span>
@@ -2179,7 +2208,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
       ) : null}
 
       {activeTab === "articlePlan" ? (
-      <section className="panel page-panel news-article-plan-panel">
+      <section className="panel page-panel news-article-plan-panel news-plan-panel">
         <div className="panel-header">
           <div>
             <h2>{t.news.articlePlan}</h2>
@@ -2291,7 +2320,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
       ) : null}
 
       {activeTab === "article" ? (
-      <div className="news-article-layout">
+      <div className="news-article-layout news-articles-panel">
       <section className="panel page-panel news-article-list-panel">
         <div className="panel-header compact-header">
           <div>
@@ -2563,7 +2592,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
       ) : null}
 
       {activeTab === "digest" ? (
-      <section className="panel page-panel">
+      <section className="panel page-panel news-digest-panel">
         <div className="panel-header">
           <div>
             <h2>{t.news.aiDigest}</h2>
@@ -2668,7 +2697,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
       ) : null}
 
       {activeTab === "collectionReport" ? (
-      <section className="panel page-panel">
+      <section className="panel page-panel news-report-panel">
         <div className="panel-header">
           <div>
             <h2>{t.news.collectionReport}</h2>
@@ -2689,7 +2718,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
       ) : null}
 
       {activeTab === "scoreReport" ? (
-      <section className="panel page-panel">
+      <section className="panel page-panel news-report-panel">
         <div className="panel-header">
           <div>
             <h2>{t.news.scoreReport}</h2>
@@ -2710,7 +2739,7 @@ export function AINewsPage({ t }: AINewsPageProps) {
       ) : null}
 
       {activeTab === "eventReport" ? (
-      <section className="panel page-panel">
+      <section className="panel page-panel news-report-panel">
         <div className="panel-header">
           <div>
             <h2>{t.news.eventReport}</h2>

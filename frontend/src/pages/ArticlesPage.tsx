@@ -5,6 +5,7 @@ import { fetchFinalArticle, fetchFinalArticles, fetchPackagedArticle, fetchRepor
 import { copyText, downloadMarkdown } from "../fileUtils";
 import type { Language, Translation } from "../i18n";
 import { markdownImageSrc } from "../markdownImages";
+import { useContentIndexData } from "../hooks/useContentIndexData";
 import type { FinalArticleItem } from "../types";
 import { projectName, projectUrl } from "./pageUtils";
 
@@ -50,6 +51,7 @@ function sourceLabel(article: FinalArticleItem, language: Language) {
 }
 
 export function ArticlesPage({ t, language }: ArticlesPageProps) {
+  const contentIndex = useContentIndexData();
   const [articles, setArticles] = useState<FinalArticleItem[]>([]);
   const [selectedArticleKey, setSelectedArticleKey] = useState("");
   const [markdown, setMarkdown] = useState("");
@@ -162,7 +164,7 @@ export function ArticlesPage({ t, language }: ArticlesPageProps) {
     if (!article?.safe_name) return;
     setPackagingSafeName(article.safe_name);
     try {
-      await packageArticles({
+      const packaged = await packageArticles({
         safe_names: [article.safe_name],
         full_names: article.full_name ? [article.full_name] : [],
       });
@@ -177,6 +179,10 @@ export function ArticlesPage({ t, language }: ArticlesPageProps) {
       setSourcePath(payload.path || nextArticle.packaged_article_path || "");
       setMarkdown(payload.content_markdown || "");
       setError("");
+      await contentIndex.handleContentMutationSuccess(packaged as unknown as Record<string, unknown>, {
+        contentTypes: [article.source === "custom" ? "github_custom_article" : "github_article"],
+        repoFullName: article.full_name, preferredVariant: "package", openAfterSync: true,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : t.messages.previewFailed);
     } finally {
@@ -187,8 +193,11 @@ export function ArticlesPage({ t, language }: ArticlesPageProps) {
   const handleGeneratePackages = async () => {
     setBulkPackaging(true);
     try {
-      await packageArticles({ top: articles.filter((article) => article.source !== "custom").length || undefined });
+      const packaged = await packageArticles({ top: articles.filter((article) => article.source !== "custom").length || undefined });
       await loadArticles();
+      await contentIndex.handleContentMutationSuccess(packaged as unknown as Record<string, unknown>, {
+        contentTypes: ["github_article"], preferredVariant: "package", openAfterSync: false,
+      });
       flash(t.messages.packageSuccess || "发布包已生成");
     } catch (err) {
       setError(err instanceof Error ? err.message : t.messages.previewFailed);
