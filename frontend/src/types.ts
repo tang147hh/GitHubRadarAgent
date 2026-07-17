@@ -148,6 +148,7 @@ export type PipelineStage = {
   error?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
+  summary?: string;
 };
 
 export type ScoreRankingItem = {
@@ -394,6 +395,8 @@ export type NewsItem = {
   url: string;
   source: string;
   source_type: string;
+  source_category?: string;
+  editorial_category?: string;
   published_at?: string | null;
   fetched_at: string;
   summary: string;
@@ -419,6 +422,8 @@ export type NewsCollectionResult = {
   fresh_count: number;
   sources: string[];
   source_counts: Record<string, number>;
+  source_category_counts?: Record<string, number>;
+  editorial_category_counts?: Record<string, number>;
   availability_counts: Record<string, number>;
   items: NewsItem[];
   warnings: string[];
@@ -636,12 +641,17 @@ export type NewsScore = {
   url: string;
   source: string;
   source_type: string;
+  source_category?: string;
+  editorial_category?: string;
   category: string;
   importance_score: number;
+  policy_value_score: number;
+  trend_value_score: number;
+  industry_impact_score: number;
+  public_interest_score: number;
+  source_reliability_score: number;
   freshness_score: number;
-  source_score: number;
-  relevance_score: number;
-  discussion_score: number;
+  ai_relevance_score: number;
   writing_value_score: number;
   total_score: number;
   recommended: boolean;
@@ -656,6 +666,7 @@ export type NewsScoringResult = {
   generated_at: string;
   total_count: number;
   recommended_count: number;
+  source_category_counts?: Record<string, number>;
   category_counts: Record<string, number>;
   section_counts: Record<string, number>;
   scores: NewsScore[];
@@ -775,6 +786,38 @@ export type NewsDigestWriteRequest = {
 export type NewsDigestReviewRequest = {
   threshold?: number;
   polish?: boolean;
+};
+
+export type NewsDigestPipelineRequest = {
+  hours?: number;
+  limit?: number;
+  translate?: boolean;
+  translate_limit?: number;
+  score_top?: number;
+  min_score?: number;
+  event_top?: number;
+  digest_top?: number;
+  polish?: boolean;
+  date?: string | null;
+};
+
+export type NewsDigestPipelineResult = {
+  exists: boolean;
+  generated_at: string;
+  date: string;
+  status: string;
+  stages: PipelineStage[];
+  collection_count: number;
+  scored_count: number;
+  event_count: number;
+  digest_event_count: number;
+  digest_title: string;
+  digest_path?: string | null;
+  package_path?: string | null;
+  quality_score?: number | null;
+  publish_ready: boolean;
+  content_id?: string | null;
+  warnings: string[];
 };
 
 export type NewsReportContent = {

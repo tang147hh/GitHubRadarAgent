@@ -459,7 +459,9 @@ class NewsEventBuilderService:
         latest = max(published_values, key=self._timestamp) if published_values else None
         category = self._event_category([score for _item, score in cluster], primary_score)
         score = self._event_score(cluster, primary_score, source_types, sources, latest_item.freshness)
-        section = CATEGORY_SECTION_MAP.get(category, "暂不推荐")
+        section = primary_score.recommended_section
+        if not section or section == "暂不推荐":
+            section = CATEGORY_SECTION_MAP.get(category, "暂不推荐")
         if score < min_score or category == "noise":
             section = "暂不推荐"
 

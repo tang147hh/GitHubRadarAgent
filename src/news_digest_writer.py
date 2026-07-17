@@ -16,22 +16,24 @@ from src.news_scorer import CATEGORY_SECTION_MAP
 
 
 SECTION_ORDER = [
-    "今日大事件",
-    "模型与产品",
-    "开源与工具",
-    "论文与研究",
+    "政策与监管",
+    "趋势观察",
+    "大厂与产品",
+    "产业动态",
+    "研究前沿",
+    "AI 趣事",
     "开发者社区",
-    "商业与监管",
     "值得继续跟进",
 ]
 
 SECTION_LIMITS = {
-    "今日大事件": 2,
-    "模型与产品": 3,
-    "开源与工具": 3,
-    "论文与研究": 3,
+    "政策与监管": 3,
+    "趋势观察": 3,
+    "大厂与产品": 3,
+    "产业动态": 3,
+    "研究前沿": 3,
+    "AI 趣事": 2,
     "开发者社区": 3,
-    "商业与监管": 2,
     "值得继续跟进": 3,
 }
 
@@ -347,7 +349,7 @@ class NewsDigestWriterService:
         summary = _clean_text(event.event_summary_zh or event.event_summary or title, 220)
         if event.category == "community_discussion":
             return f"这是一条来自开发者社区的消息，主题是「{title}」。从事件卡片看，可核验信息是：{summary}"
-        if event.category == "research_paper":
+        if event.category == "research_breakthrough":
             return f"这条研究动态围绕「{title}」展开。事件卡片显示，相关工作主要在提出、探索或展示新的方法与结果：{summary}"
         return f"这条消息的核心是「{title}」。从事件卡片看，主要变化可以概括为：{summary}"
 
@@ -356,9 +358,9 @@ class NewsDigestWriterService:
         source_note = f"目前覆盖 {event.source_count or len(event.sources or []) or 1} 个来源"
         if event.category == "policy_regulation":
             return f"值得关注的是，它可能影响后续产品合规或行业预期，但现在只能以原始来源信息为准。{source_note}。{reasons}"
-        if event.category == "funding_business":
+        if event.category == "trend_industry":
             return f"值得关注的是，它反映了 AI 商业化和资本动作的一个新信号，但不宜据此推导超出来源的信息。{source_note}。{reasons}"
-        if event.category == "research_paper":
+        if event.category == "research_breakthrough":
             return f"值得关注的是，这类研究可能为模型、工具或评测方向提供新线索，但结论仍需要更多验证。{source_note}。{reasons}"
         if event.category == "community_discussion":
             return f"值得关注的是，它提供了一个观察开发者真实场景问题的入口，但不能写成已确认事实或社区共识。{source_note}。{reasons}"

@@ -18,6 +18,7 @@ from src.news_article_planner import NewsArticlePlannerService
 from src.news_article_polisher import NewsArticlePolisherService
 from src.news_article_quality import NewsArticleQualityEvaluator
 from src.news_digest_polisher import NewsDigestPolisherService
+from src.news_digest_pipeline import NewsDigestPipelineService
 from src.news_digest_quality import NewsDigestQualityEvaluator
 from src.news_digest_writer import NewsDigestWriterService
 from src.news_event_builder import NewsEventBuilderService
@@ -386,6 +387,47 @@ def _run_review_news_digest_command(threshold: float = 80.0, polish: bool = True
         for issue in report.issues[:5]:
             print(f"- [{issue.severity}] {issue.issue_type}: {issue.description}")
     return {"article": article, "quality_report": report}
+
+
+def _run_news_digest_pipeline_command(
+    hours: int = 24,
+    limit: int = 100,
+    translate: bool = True,
+    translate_limit: int = 100,
+    score_top: int = 30,
+    min_score: float = 50,
+    event_top: int = 20,
+    digest_top: int = 12,
+    polish: bool = True,
+    date: str | None = None,
+):
+    result = NewsDigestPipelineService().run(
+        hours=hours,
+        limit=limit,
+        translate=translate,
+        translate_limit=translate_limit,
+        score_top=score_top,
+        min_score=min_score,
+        event_top=event_top,
+        digest_top=digest_top,
+        polish=polish,
+        date=date,
+    )
+    print(f"pipeline status: {result.status}")
+    print(f"collection_count: {result.collection_count}")
+    print(f"event_count: {result.event_count}")
+    print(f"digest_event_count: {result.digest_event_count}")
+    print(f"quality_score: {result.quality_score if result.quality_score is not None else '-'}")
+    print(f"publish_ready: {'yes' if result.publish_ready else 'no'}")
+    print(f"digest markdown path: {result.digest_path or '-'}")
+    print(f"package path: {result.package_path or '-'}")
+    print(f"content_id: {result.content_id or '-'}")
+    print("warnings:")
+    for warning in result.warnings:
+        print(f"- {warning}")
+    if not result.warnings:
+        print("-")
+    return result
 
 
 def _load_custom_direction(direction: str | None = None, direction_file: str | None = None) -> str | None:
@@ -1028,6 +1070,34 @@ if typer is not None:
         _print_custom_article_result(result)
 
 
+    @app.command("run-news-digest")
+    def run_news_digest(
+        hours: int = typer.Option(24, "--hours"),
+        limit: int = typer.Option(100, "--limit"),
+        translate: bool = typer.Option(True, "--translate/--no-translate"),
+        translate_limit: int = typer.Option(100, "--translate-limit"),
+        score_top: int = typer.Option(30, "--score-top"),
+        min_score: float = typer.Option(50, "--min-score"),
+        event_top: int = typer.Option(20, "--event-top"),
+        digest_top: int = typer.Option(12, "--digest-top"),
+        polish: bool = typer.Option(True, "--polish/--no-polish"),
+        date: Optional[str] = typer.Option(None, "--date"),
+    ) -> None:
+        """Run the complete daily AI news digest pipeline."""
+        _run_news_digest_pipeline_command(
+            hours=hours,
+            limit=limit,
+            translate=translate,
+            translate_limit=translate_limit,
+            score_top=score_top,
+            min_score=min_score,
+            event_top=event_top,
+            digest_top=digest_top,
+            polish=polish,
+            date=date,
+        )
+
+
     @app.command("collect-news")
     def collect_news(
         hours: int = typer.Option(
@@ -1458,6 +1528,23 @@ def _run_with_argparse(argv: Optional[list[str]] = None) -> None:
         help="Optional reference article text for style-only analysis. Repeatable.",
     )
 
+    run_news_digest_parser = subparsers.add_parser(
+        "run-news-digest",
+        help="Run the complete daily AI news digest pipeline.",
+    )
+    run_news_digest_parser.add_argument("--hours", type=int, default=24)
+    run_news_digest_parser.add_argument("--limit", type=int, default=100)
+    run_news_digest_parser.add_argument("--translate", dest="translate", action="store_true")
+    run_news_digest_parser.add_argument("--no-translate", dest="translate", action="store_false")
+    run_news_digest_parser.add_argument("--translate-limit", type=int, default=100)
+    run_news_digest_parser.add_argument("--score-top", type=int, default=30)
+    run_news_digest_parser.add_argument("--min-score", type=float, default=50)
+    run_news_digest_parser.add_argument("--event-top", type=int, default=20)
+    run_news_digest_parser.add_argument("--digest-top", type=int, default=12)
+    run_news_digest_parser.add_argument("--no-polish", dest="polish", action="store_false")
+    run_news_digest_parser.add_argument("--date", default=None)
+    run_news_digest_parser.set_defaults(translate=True, polish=True)
+
     collect_news_parser = subparsers.add_parser(
         "collect-news",
         help="Collect and standardize AI news with optional Chinese title/summary translation.",
@@ -1792,6 +1879,19 @@ def _run_with_argparse(argv: Optional[list[str]] = None) -> None:
             reference_source_names=reference_source_names,
         )
         _print_custom_article_result(result)
+    elif args.command == "run-news-digest":
+        _run_news_digest_pipeline_command(
+            hours=args.hours,
+            limit=args.limit,
+            translate=args.translate,
+            translate_limit=args.translate_limit,
+            score_top=args.score_top,
+            min_score=args.min_score,
+            event_top=args.event_top,
+            digest_top=args.digest_top,
+            polish=args.polish,
+            date=args.date,
+        )
     elif args.command == "collect-news":
         _run_collect_news_command(
             hours=args.hours,

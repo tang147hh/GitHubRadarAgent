@@ -26,6 +26,7 @@ from api.schemas import (
     NewsCollectRequest,
     NewsDigestWriteRequest,
     NewsDigestReviewRequest,
+    NewsDigestPipelineRequest,
     NewsEventBuildRequest,
     NewsScoreRequest,
     NewsSelectionRequest,
@@ -45,6 +46,7 @@ from src.news_article_quality import NewsArticleQualityEvaluator
 from src.news_article_writer import NewsArticleWriterService
 from src.news_detail_service import NewsDetailService
 from src.news_digest_polisher import NewsDigestPolisherService
+from src.news_digest_pipeline import NewsDigestPipelineService
 from src.news_digest_quality import NewsDigestQualityEvaluator
 from src.news_digest_writer import NewsDigestWriterService
 from src.news_event_builder import NewsEventBuilderService
@@ -2064,6 +2066,22 @@ def write_news_digest(request: NewsDigestWriteRequest) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"AI news digest writing failed: {type(exc).__name__}: {exc}")
     return {"exists": True, **_model_dump(result)}
+
+
+@app.post("/api/news/digest/run")
+def run_news_digest_pipeline(request: NewsDigestPipelineRequest) -> dict[str, Any]:
+    payload = _model_dump(request)
+    os.chdir(PROJECT_ROOT)
+    result = NewsDigestPipelineService(project_root=PROJECT_ROOT).run(**payload)
+    return _model_dump(result)
+
+
+@app.get("/api/news/digest/pipeline/latest")
+def latest_news_digest_pipeline() -> dict[str, Any]:
+    result = NewsDigestPipelineService(project_root=PROJECT_ROOT).load_latest()
+    if result is None:
+        raise HTTPException(status_code=404, detail="No AI news digest pipeline result found. Run the digest pipeline first.")
+    return _model_dump(result)
 
 
 @app.post("/api/news/digest/review")

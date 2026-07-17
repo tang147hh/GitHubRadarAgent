@@ -26,6 +26,7 @@ import {
   fetchNewsDigest,
   fetchNewsDigestContent,
   fetchNewsDigestPackage,
+  fetchNewsDigestPipelineLatest,
   fetchNewsDigestReview,
   fetchNewsEvents,
   fetchNewsEventsReport,
@@ -36,6 +37,7 @@ import {
   scoreNews,
   reviewNewsArticle,
   reviewNewsDigest,
+  runNewsDigestPipeline,
   writeNewsArticle,
   writeNewsDigest,
 } from "../api";
@@ -53,6 +55,7 @@ import type {
   NewsDetailResult,
   NewsDigestArticle,
   NewsDigestQualityReport,
+  NewsDigestPipelineResult,
   NewsEventCard,
   NewsEventResult,
   NewsItem,
@@ -60,12 +63,14 @@ import type {
   NewsScore,
   NewsSelectionContext,
   NewsScoringResult,
+  ContentVariant,
 } from "../types";
 import { asArray, formatDate } from "./pageUtils";
 
 type AINewsPageProps = {
   t: Translation;
   view?: AINewsView;
+  onOpenLibrary?: (contentId: string, variant: ContentVariant) => void;
 };
 
 export type AINewsView = "legacy" | "workbench" | "collect" | "list" | "detail" | "selection" | "plan" | "articles" | "digest" | "reports";
@@ -73,6 +78,7 @@ export type AINewsView = "legacy" | "workbench" | "collect" | "list" | "detail" 
 type NewsFilters = {
   source: string;
   sourceType: string;
+  sourceCategory: string;
   freshness: string;
   availability: string;
   translationStatus: string;
@@ -88,10 +94,12 @@ type NewsFilters = {
 type NewsTab = "list" | "recommended" | "events" | "articlePlan" | "article" | "digest" | "collectionReport" | "scoreReport" | "eventReport";
 
 const SOURCE_OPTIONS = ["official", "hn", "arxiv", "gdelt", "rsshub"];
+const EDITORIAL_SECTIONS = ["政策与监管", "趋势观察", "大厂与产品", "产业动态", "研究前沿", "AI 趣事", "开发者社区"];
 const MAX_SELECTED_NEWS = 5;
 const DEFAULT_FILTERS: NewsFilters = {
   source: "",
   sourceType: "",
+  sourceCategory: "",
   freshness: "",
   availability: "",
   translationStatus: "",
@@ -112,6 +120,8 @@ const emptyNewsResult = (): NewsCollectionResult => ({
   fresh_count: 0,
   sources: [],
   source_counts: {},
+  source_category_counts: {},
+  editorial_category_counts: {},
   availability_counts: {},
   items: [],
   warnings: [],
@@ -122,6 +132,7 @@ const emptyScoringResult = (): NewsScoringResult => ({
   generated_at: "",
   total_count: 0,
   recommended_count: 0,
+  source_category_counts: {},
   category_counts: {},
   section_counts: {},
   scores: [],
@@ -245,8 +256,10 @@ function normalizeNewsArticlePayload(payload: NewsArticle, contentMarkdown = "")
   };
 }
 
-function uniqueValues(items: NewsItem[], key: keyof Pick<NewsItem, "source" | "source_type" | "freshness" | "content_availability">) {
-  return Array.from(new Set(items.map((item) => item[key]).filter(Boolean))).sort();
+function uniqueValues(items: NewsItem[], key: keyof Pick<NewsItem, "source" | "source_type" | "source_category" | "freshness" | "content_availability">) {
+  return Array.from(
+    new Set(items.map((item) => item[key]).filter((value): value is string => typeof value === "string" && Boolean(value))),
+  ).sort();
 }
 
 function uniqueScoreValues(items: NewsScore[], key: keyof Pick<NewsScore, "category" | "recommended_section">) {
@@ -270,6 +283,22 @@ function translationStatusLabel(value: string | undefined | null, t: Translation
   if (value === "failed") return t.news.translationFailed;
   if (value === "source_is_chinese") return t.news.sourceIsChinese;
   return value || "-";
+}
+
+function editorialCategoryLabel(value: string | undefined, t: Translation) {
+  const labels: Record<string, string> = {
+    official_product: t.news.officialProduct,
+    policy_regulation: t.news.policyRegulation,
+    trend_industry: t.news.trendIndustry,
+    research_breakthrough: t.news.researchBreakthrough,
+    fun_story: t.news.funStory,
+    developer_community: t.news.developerCommunity,
+    developer_tool: t.news.developerTools,
+    open_source: t.news.openSource,
+    community_discussion: t.news.developerCommunity,
+    noise: t.news.noise,
+  };
+  return labels[value || "noise"] || value || t.news.noise;
 }
 
 function extractionStatusLabel(value: string | undefined | null, t: Translation) {
@@ -450,7 +479,7 @@ const tabForView = (view: AINewsView): NewsTab => {
   return "list";
 };
 
-export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
+export function AINewsPage({ t, view = "legacy", onOpenLibrary }: AINewsPageProps) {
   const contentIndex = useContentIndexData();
   const [news, setNews] = useState<NewsCollectionResult>(() => emptyNewsResult());
   const [scores, setScores] = useState<NewsScoringResult>(() => emptyScoringResult());
@@ -473,6 +502,8 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
   const [digestPackage, setDigestPackage] = useState("");
   const [digestPackagePath, setDigestPackagePath] = useState("");
   const [digestPath, setDigestPath] = useState("");
+  const [digestPipeline, setDigestPipeline] = useState<NewsDigestPipelineResult | null>(null);
+  const [runningDigestPipeline, setRunningDigestPipeline] = useState(false);
   const [report, setReport] = useState("");
   const [reportPath, setReportPath] = useState("");
   const [scoreReport, setScoreReport] = useState("");
@@ -497,12 +528,12 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
     if (view !== "legacy") setActiveTab(tabForView(view));
   }, [view]);
   const [hours, setHours] = useState(24);
-  const [limit, setLimit] = useState(50);
+  const [limit, setLimit] = useState(100);
   const [includeFulltext, setIncludeFulltext] = useState(false);
   const [translate, setTranslate] = useState(true);
-  const [translateLimit, setTranslateLimit] = useState(50);
-  const [scoreTop, setScoreTop] = useState(20);
-  const [minScore, setMinScore] = useState(60);
+  const [translateLimit, setTranslateLimit] = useState(100);
+  const [scoreTop, setScoreTop] = useState(30);
+  const [minScore, setMinScore] = useState(50);
   const [eventTop, setEventTop] = useState(20);
   const [eventMinScore, setEventMinScore] = useState(60);
   const [similarityThreshold, setSimilarityThreshold] = useState(0.55);
@@ -538,10 +569,16 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
       setNews({
         ...emptyNewsResult(),
         ...payload,
-        items: asArray(payload.items),
+        items: asArray(payload.items).map((item) => ({
+          ...item,
+          source_category: item.source_category || "noise",
+          editorial_category: item.editorial_category || item.source_category || "noise",
+        })),
         warnings: asArray(payload.warnings),
         sources: asArray(payload.sources),
         source_counts: payload.source_counts || {},
+        source_category_counts: payload.source_category_counts || {},
+        editorial_category_counts: payload.editorial_category_counts || {},
         availability_counts: payload.availability_counts || {},
       });
       setError("");
@@ -580,6 +617,7 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
         warnings: asArray(payload.warnings),
         category_counts: payload.category_counts || {},
         section_counts: payload.section_counts || {},
+        source_category_counts: payload.source_category_counts || {},
       });
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
@@ -813,6 +851,19 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
     }
   }, [t.news.digestPackageLoadFailed]);
 
+  const loadDigestPipeline = useCallback(async () => {
+    try {
+      const payload = await fetchNewsDigestPipelineLatest();
+      setDigestPipeline({ ...payload, stages: asArray(payload.stages), warnings: asArray(payload.warnings) });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setDigestPipeline(null);
+      } else {
+        setError(err instanceof Error ? err.message : t.news.digestPipelineLoadFailed);
+      }
+    }
+  }, [t.news.digestPipelineLoadFailed]);
+
   const refreshAll = useCallback(async () => {
     await Promise.all([
       loadNews(),
@@ -827,6 +878,7 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
       loadDigest(),
       loadDigestReview(),
       loadDigestPackage(),
+      loadDigestPipeline(),
     ]);
   }, [
     loadNews,
@@ -841,6 +893,7 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
     loadDigest,
     loadDigestReview,
     loadDigestPackage,
+    loadDigestPipeline,
   ]);
 
   useEffect(() => {
@@ -867,6 +920,7 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
   }, [scoreItems]);
   const sourceOptions = useMemo(() => uniqueValues(items, "source"), [items]);
   const sourceTypeOptions = useMemo(() => uniqueValues(items, "source_type"), [items]);
+  const sourceCategoryOptions = useMemo(() => uniqueValues(items, "source_category"), [items]);
   const freshnessOptions = useMemo(() => uniqueValues(items, "freshness"), [items]);
   const availabilityOptions = useMemo(() => uniqueValues(items, "content_availability"), [items]);
   const categoryOptions = useMemo(() => uniqueScoreValues(scoreItems, "category"), [scoreItems]);
@@ -911,6 +965,7 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
       const score = scoreByNewsId.get(item.id);
       if (filters.source && item.source !== filters.source) return false;
       if (filters.sourceType && item.source_type !== filters.sourceType) return false;
+      if (filters.sourceCategory && (item.source_category || "noise") !== filters.sourceCategory) return false;
       if (filters.freshness && item.freshness !== filters.freshness) return false;
       if (filters.availability && item.content_availability !== filters.availability) return false;
       if (filters.translationStatus && (item.translation_status || "skipped") !== filters.translationStatus) return false;
@@ -1176,6 +1231,35 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
       setError(err instanceof Error ? err.message : t.news.digestReviewFailed);
     } finally {
       setReviewingDigest(false);
+    }
+  };
+
+  const handleRunDigestPipeline = async () => {
+    setRunningDigestPipeline(true);
+    setError("");
+    try {
+      const payload = await runNewsDigestPipeline({
+        hours,
+        limit,
+        translate,
+        translate_limit: translateLimit,
+        score_top: scoreTop,
+        min_score: minScore,
+        event_top: eventTop,
+        digest_top: digestTop,
+        polish: digestPolish,
+      });
+      setDigestPipeline({ ...payload, stages: asArray(payload.stages), warnings: asArray(payload.warnings) });
+      await Promise.all([loadDigest(), loadDigestReview(), loadDigestPackage(), contentIndex.refreshContentIndex()]);
+      if (payload.status === "failed") {
+        setError(t.news.digestPipelineFailed);
+      } else {
+        flash(t.news.digestPipelineSuccess);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t.news.digestPipelineFailed);
+    } finally {
+      setRunningDigestPipeline(false);
     }
   };
 
@@ -1674,44 +1758,61 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
 
       <section className="panel page-panel news-digest-control-panel">
         <div className="panel-header">
-          <h2>{t.news.digestControls}</h2>
+          <div>
+            <h2>{t.news.dailyDigestTitle}</h2>
+            <p className="muted-line">{t.news.dailyDigestSubtitle}</p>
+          </div>
           <div className="button-row">
-            <button className="secondary-button" type="button" onClick={handleReviewDigest} disabled={reviewingDigest || !digest.content_markdown}>
-              <Sparkles className={reviewingDigest ? "spin-icon" : ""} size={17} aria-hidden="true" />
-              <span>{reviewingDigest ? t.news.reviewingDigest : t.news.reviewDigest}</span>
-            </button>
-            <button className="primary-button" type="button" onClick={handleWriteDigest} disabled={writingDigest || !eventItems.length}>
-              <RefreshCw className={writingDigest ? "spin-icon" : ""} size={17} aria-hidden="true" />
-              <span>{writingDigest ? t.news.writingDigest : t.news.writeDigest}</span>
+            <button className="primary-button" type="button" onClick={handleRunDigestPipeline} disabled={runningDigestPipeline}>
+              <RefreshCw className={runningDigestPipeline ? "spin-icon" : ""} size={17} aria-hidden="true" />
+              <span>{runningDigestPipeline ? t.news.generatingTodayDigest : t.news.generateTodayDigest}</span>
             </button>
           </div>
         </div>
         <div className="news-control-grid">
           <label>
-            <span>{t.news.digestTop}</span>
-            <input type="number" min={1} max={50} value={digestTop} onChange={(event) => setDigestTop(Number(event.target.value) || 12)} />
+            <span>{t.news.timeWindow}</span>
+            <input type="number" min={1} max={336} value={hours} onChange={(event) => setHours(Number(event.target.value) || 24)} />
           </label>
           <label>
-            <span>{t.news.publishThreshold}</span>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={digestReviewThreshold}
-              onChange={(event) => setDigestReviewThreshold(Number(event.target.value) || 80)}
-            />
+            <span>{t.news.collectionLimit}</span>
+            <input type="number" min={1} max={500} value={limit} onChange={(event) => setLimit(Number(event.target.value) || 100)} />
+          </label>
+          <label className="checkbox-setting news-checkbox">
+            <span>{t.news.enableTranslation}</span>
+            <input type="checkbox" checked={translate} onChange={(event) => setTranslate(event.target.checked)} />
+          </label>
+          <label>
+            <span>{t.news.minScore}</span>
+            <input type="number" min={0} max={100} value={minScore} onChange={(event) => setMinScore(Number(event.target.value) || 50)} />
+          </label>
+          <label>
+            <span>{t.news.eventTop}</span>
+            <input type="number" min={1} max={100} value={eventTop} onChange={(event) => setEventTop(Number(event.target.value) || 20)} />
+          </label>
+          <label>
+            <span>{t.news.digestTop}</span>
+            <input type="number" min={1} max={50} value={digestTop} onChange={(event) => setDigestTop(Number(event.target.value) || 12)} />
           </label>
           <label className="checkbox-setting news-checkbox">
             <span>{t.news.polishDigest}</span>
             <input type="checkbox" checked={digestPolish} onChange={(event) => setDigestPolish(event.target.checked)} />
           </label>
           <div className="news-score-status">
-            <span>{t.news.generationMode}</span>
-            <strong>{digest.content_markdown ? digest.generation_mode || "-" : "-"}</strong>
+            <span>{t.news.pipelineStatus}</span>
+            <strong>{digestPipeline?.status || "-"}</strong>
+          </div>
+          <div className="news-score-status">
+            <span>{t.news.totalNews}</span>
+            <strong>{digestPipeline?.collection_count ?? 0}</strong>
+          </div>
+          <div className="news-score-status">
+            <span>{t.news.mergedEventCount}</span>
+            <strong>{digestPipeline?.event_count ?? 0}</strong>
           </div>
           <div className="news-score-status">
             <span>{t.news.digestEventCount}</span>
-            <strong>{digest.event_count || 0}</strong>
+            <strong>{digestPipeline?.digest_event_count ?? digest.event_count ?? 0}</strong>
           </div>
           <div className="news-score-status">
             <span>{t.news.generatedAt}</span>
@@ -1719,18 +1820,28 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
           </div>
           <div className="news-score-status">
             <span>{t.news.qualityScore}</span>
-            <strong>{digestReview?.total_score != null ? Number(digestReview.total_score).toFixed(1) : t.news.notReviewed}</strong>
+            <strong>{digestPipeline?.quality_score != null ? Number(digestPipeline.quality_score).toFixed(1) : t.news.notReviewed}</strong>
           </div>
           <div className="news-score-status">
             <span>{t.news.publishStatus}</span>
-            <strong>{digestReview ? (digestReview.publish_ready ? t.news.publishReady : t.news.needsRevision) : t.news.notReviewed}</strong>
+            <strong>{digestPipeline ? (digestPipeline.publish_ready ? t.news.publishReady : t.news.needsRevision) : t.news.notReviewed}</strong>
           </div>
         </div>
-        {digest.warnings.length ? (
+        {digestPipeline?.stages.length ? (
+          <div className="digest-pipeline-stages">
+            {digestPipeline.stages.map((stage) => (
+              <div key={stage.name} className={`digest-pipeline-stage is-${stage.status || "pending"}`}>
+                <div><strong>{stage.name}</strong><span>{stage.status || "pending"}</span></div>
+                <p>{stage.summary || stage.error || "-"}</p>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {digestPipeline?.warnings.length ? (
           <details className="banner warning news-warning">
-            <summary>{`${t.labels.warnings} (${digest.warnings.length})`}</summary>
+            <summary>{`${t.labels.warnings} (${digestPipeline.warnings.length})`}</summary>
             <ul>
-              {digest.warnings.map((warning) => (
+              {digestPipeline.warnings.map((warning) => (
                 <li key={warning}>{warning}</li>
               ))}
             </ul>
@@ -1759,6 +1870,15 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
               <option value="">{t.news.allSources}</option>
               {sourceTypeOptions.map((sourceType) => (
                 <option value={sourceType} key={sourceType}>{sourceType}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>{t.news.sourceCategory}</span>
+            <select value={filters.sourceCategory} onChange={(event) => setFilter("sourceCategory", event.target.value)}>
+              <option value="">{t.news.allSourceCategories}</option>
+              {sourceCategoryOptions.map((sourceCategory) => (
+                <option value={sourceCategory} key={sourceCategory}>{editorialCategoryLabel(sourceCategory, t)}</option>
               ))}
             </select>
           </label>
@@ -1809,7 +1929,7 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
             <span>{t.news.recommendedSection}</span>
             <select value={filters.section} onChange={(event) => setFilter("section", event.target.value)}>
               <option value="">{t.news.allSections}</option>
-              {sectionOptions.map((section) => (
+              {Array.from(new Set([...EDITORIAL_SECTIONS, ...sectionOptions])).map((section) => (
                 <option value={section} key={section}>{section}</option>
               ))}
             </select>
@@ -1925,7 +2045,8 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
                       <span className={`soft-badge ${item.translation_status === "failed" ? "failed" : "unknown"}`}>
                         {translationStatusLabel(item.translation_status, t)}
                       </span>
-                      {score ? <span className="soft-badge unknown">{score.category}</span> : null}
+                      <span className="soft-badge source-category-badge">{editorialCategoryLabel(item.source_category, t)}</span>
+                      {score ? <span className="soft-badge unknown">{editorialCategoryLabel(score.category, t)}</span> : null}
                       {score ? <span className={`soft-badge ${score.recommended ? "running" : "pending"}`}>{score.recommended_section}</span> : null}
                       {item.language ? <span className="soft-badge unknown">{item.language}</span> : null}
                     </div>
@@ -2595,10 +2716,18 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
       <section className="panel page-panel news-digest-panel">
         <div className="panel-header">
           <div>
-            <h2>{t.news.aiDigest}</h2>
+            <h2>{t.news.todayDigestTitle}</h2>
             {digestPath ? <p className="muted-line">{digestPath}</p> : null}
           </div>
           <div className="button-row">
+            <button className="secondary-button" type="button" onClick={() => document.getElementById("news-digest-package")?.scrollIntoView({ behavior: "smooth" })} disabled={!digestPackage}>
+              <ExternalLink size={16} aria-hidden="true" />
+              <span>{t.actions.viewPackage}</span>
+            </button>
+            <button className="secondary-button" type="button" onClick={() => digestPipeline?.content_id && onOpenLibrary?.(digestPipeline.content_id, digestPipeline.package_path ? "package" : "source")} disabled={!digestPipeline?.content_id || !onOpenLibrary}>
+              <ExternalLink size={16} aria-hidden="true" />
+              <span>{t.contentSync.viewLibrary}</span>
+            </button>
             <button className="secondary-button" type="button" onClick={() => void handleCopyReport(digest.content_markdown)} disabled={!digest.content_markdown}>
               <Clipboard size={16} aria-hidden="true" />
               <span>{t.actions.copyMarkdown}</span>
@@ -2665,7 +2794,7 @@ export function AINewsPage({ t, view = "legacy" }: AINewsPageProps) {
                 <p className="empty-state">{t.news.noDigestReview}</p>
               )}
             </div>
-            <div className="news-package-panel">
+            <div className="news-package-panel" id="news-digest-package">
               <div className="panel-header compact-header">
                 <div>
                   <h3>{t.news.packagePreview}</h3>

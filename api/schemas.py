@@ -184,6 +184,19 @@ class NewsDigestReviewRequest(BaseModel):
     polish: bool = True
 
 
+class NewsDigestPipelineRequest(BaseModel):
+    hours: int = Field(default=24, ge=1, le=336)
+    limit: int = Field(default=100, ge=1, le=500)
+    translate: bool = True
+    translate_limit: int = Field(default=100, ge=0, le=500)
+    score_top: int = Field(default=30, ge=1, le=100)
+    min_score: float = Field(default=50, ge=0, le=100)
+    event_top: int = Field(default=20, ge=1, le=100)
+    digest_top: int = Field(default=12, ge=1, le=50)
+    polish: bool = True
+    date: Optional[str] = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
 class NewsSelectionRequest(BaseModel):
     news_ids: List[str] = Field(default_factory=list, min_items=1, max_items=5)
     primary_news_id: Optional[str] = None

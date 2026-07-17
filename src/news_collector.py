@@ -23,7 +23,9 @@ from src.news_sources import (
     DEFAULT_SOURCE_GROUPS,
     RSSHUB_ROUTES,
     SOURCE_ALIASES,
+    SOURCE_CATEGORY_WEIGHTS,
     RssSource,
+    infer_editorial_category,
 )
 from src.news_translator import NewsTranslatorService
 
@@ -195,7 +197,7 @@ class NewsCollectorService:
         for item in items:
             item.freshness = self.classify_freshness(item.published_at)
             item.duplicate_key = item.duplicate_key or duplicate_key_for(item.title, item.url)
-            item.raw_score = item.raw_score or self._score_item(item)
+            item.raw_score = self._score_item(item)
 
         deduped = self.dedupe_items(items)
         window_items = [item for item in deduped if self._is_within_window(item.published_at, hours) or item.freshness == "unknown"]
@@ -203,7 +205,7 @@ class NewsCollectorService:
             warnings.append(f"No items matched the last {hours} hours; returning older latest items for diagnostics.")
             window_items = deduped
 
-        ranked = sorted(window_items, key=self._sort_key, reverse=True)[:limit]
+        ranked = self._rank_editorial_mix(window_items, limit)
         if translate:
             ranked = NewsTranslatorService().translate_items(ranked, limit=translate_limit)
         else:
@@ -213,6 +215,8 @@ class NewsCollectorService:
                 item.translation_status = "skipped"
                 item.translation_error = None
         source_counts = Counter(item.source_type for item in ranked)
+        source_category_counts = Counter(item.source_category for item in ranked)
+        editorial_category_counts = Counter(item.editorial_category for item in ranked)
         availability_counts = Counter(item.content_availability for item in ranked)
         fresh_count = sum(1 for item in ranked if self._is_within_window(item.published_at, hours))
 
@@ -223,6 +227,8 @@ class NewsCollectorService:
             fresh_count=fresh_count,
             sources=sorted({item.source for item in ranked}),
             source_counts=dict(source_counts),
+            source_category_counts=dict(source_category_counts),
+            editorial_category_counts=dict(editorial_category_counts),
             availability_counts=dict(availability_counts),
             items=ranked,
             warnings=warnings,
@@ -243,6 +249,10 @@ class NewsCollectorService:
 
         items: list[NewsItem] = []
         for source in sources:
+            if not source.enabled or not source.url:
+                if source.note:
+                    warnings.append(f"{source.name} source unavailable: {source.note}")
+                continue
             try:
                 response = self.session.get(source.url, timeout=self.request_timeout)
                 response.raise_for_status()
@@ -271,6 +281,7 @@ class NewsCollectorService:
                         availability = "summary_only"
                 topics = list(source.topics)
                 matched_keywords = self._matched_keywords(f"{title} {summary}", keywords)
+                editorial_category = infer_editorial_category(f"{title} {summary}", fallback=source.source_category)
                 items.append(
                     NewsItem(
                         id=_safe_id(source.name, title, url),
@@ -278,6 +289,8 @@ class NewsCollectorService:
                         url=url,
                         source=source.name,
                         source_type=source.source_type,
+                        source_category=source.source_category,
+                        editorial_category=editorial_category,
                         published_at=_published_from_entry(entry),
                         fetched_at=utc_now_iso(),
                         summary=summary,
@@ -286,7 +299,7 @@ class NewsCollectorService:
                         language=_entry_value(entry, "language"),
                         topics=topics,
                         keywords=matched_keywords,
-                        raw_score=0.0,
+                        raw_score=source.priority_weight * 20.0 + len(matched_keywords) * 2.0,
                         duplicate_key=duplicate_key_for(title, url),
                     )
                 )
@@ -334,6 +347,8 @@ class NewsCollectorService:
                         url=url,
                         source="Hacker News",
                         source_type="community_discussion",
+                        source_category="developer_community",
+                        editorial_category=infer_editorial_category(title, fallback="developer_community"),
                         published_at=parse_datetime(hit.get("created_at")).isoformat(timespec="seconds").replace("+00:00", "Z")
                         if parse_datetime(hit.get("created_at"))
                         else None,
@@ -394,6 +409,8 @@ class NewsCollectorService:
                     url=url,
                     source="arXiv",
                     source_type="arxiv",
+                    source_category="research_breakthrough",
+                    editorial_category="research_breakthrough",
                     published_at=_published_from_entry(entry),
                     fetched_at=utc_now_iso(),
                     summary=summary,
@@ -440,6 +457,7 @@ class NewsCollectorService:
             domain = _clean_text(article.get("domain"), max_length=120) or urlparse(url).netloc
             language = article.get("language")
             matched_keywords = self._matched_keywords(title, keywords) or self._matched_keywords(url, keywords)
+            editorial_category = infer_editorial_category(title, fallback="trend_industry")
             items.append(
                 NewsItem(
                     id=_safe_id("gdelt", title, url),
@@ -447,6 +465,8 @@ class NewsCollectorService:
                     url=url,
                     source=domain,
                     source_type="gdelt",
+                    source_category=editorial_category,
+                    editorial_category=editorial_category,
                     published_at=parse_datetime(article.get("seendate")).isoformat(timespec="seconds").replace("+00:00", "Z")
                     if parse_datetime(article.get("seendate"))
                     else None,
@@ -541,6 +561,18 @@ class NewsCollectorService:
         else:
             lines.append("- none: 0")
 
+        lines.extend(["", "## 各 source_category 数量", ""])
+        if result.source_category_counts:
+            lines.extend(f"- {category}: {count}" for category, count in sorted(result.source_category_counts.items()))
+        else:
+            lines.append("- none: 0")
+
+        lines.extend(["", "## 各 editorial_category 数量", ""])
+        if result.editorial_category_counts:
+            lines.extend(f"- {category}: {count}" for category, count in sorted(result.editorial_category_counts.items()))
+        else:
+            lines.append("- none: 0")
+
         lines.extend(["", "## 正文可用性", ""])
         if result.availability_counts:
             for availability, count in sorted(result.availability_counts.items()):
@@ -553,6 +585,7 @@ class NewsCollectorService:
         for status in ("translated", "skipped", "failed", "source_is_chinese"):
             lines.append(f"- {status}: {translation_counts.get(status, 0)}")
 
+        lines.extend(["", "## 采集说明", "", "- 互动数量已被忽略，不参与采集排序或后续评分。"])
         lines.extend(["", "## Warnings", ""])
         if result.warnings:
             lines.extend(f"- {warning}" for warning in result.warnings)
@@ -569,6 +602,8 @@ class NewsCollectorService:
                     f"### {index}. {title_zh}",
                     "",
                     f"- 来源: {item.source} ({item.source_type})",
+                    f"- source_category: {item.source_category}",
+                    f"- editorial_category: {item.editorial_category}",
                     f"- 发布时间: {item.published_at or 'unknown'}",
                     f"- freshness: {item.freshness}",
                     f"- content_availability: {item.content_availability}",
@@ -588,7 +623,14 @@ class NewsCollectorService:
     def _rsshub_sources(self) -> list[RssSource]:
         base = self.rsshub_base_url.rstrip("/")
         return [
-            RssSource(source.name, f"{base}/{source.url.lstrip('/')}", source_type="rsshub", topics=source.topics)
+            RssSource(
+                source.name,
+                f"{base}/{source.url.lstrip('/')}",
+                source_type="rsshub",
+                source_category=source.source_category,
+                topics=source.topics,
+                priority_weight=source.priority_weight,
+            )
             for source in RSSHUB_ROUTES
         ]
 
@@ -644,9 +686,26 @@ class NewsCollectorService:
             score += 5
         elif item.content_availability == "summary_only":
             score += 2
-        if item.source_type in {"official_rss", "arxiv"}:
-            score += 3
+        score += SOURCE_CATEGORY_WEIGHTS.get(item.source_category, 0.1) * 12.0
         return score
+
+    def _rank_editorial_mix(self, items: list[NewsItem], limit: int) -> list[NewsItem]:
+        ranked = sorted(items, key=self._sort_key, reverse=True)
+        community_limit = max(3, int(limit * 0.15))
+        selected: list[NewsItem] = []
+        community: list[NewsItem] = []
+        for item in ranked:
+            if item.source_category == "developer_community":
+                community.append(item)
+            else:
+                selected.append(item)
+        selected = selected[: max(0, limit - min(community_limit, len(community)))]
+        selected.extend(community[:community_limit])
+        if len(selected) < limit:
+            selected_ids = {item.id for item in selected}
+            remaining = [item for item in ranked if item.id not in selected_ids]
+            selected.extend(remaining[: limit - len(selected)])
+        return sorted(selected[:limit], key=self._sort_key, reverse=True)
 
     def _sort_key(self, item: NewsItem) -> tuple[float, float]:
         published = parse_datetime(item.published_at)

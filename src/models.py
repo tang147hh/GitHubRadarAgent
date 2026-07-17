@@ -36,6 +36,8 @@ class NewsItem(BaseModel):
     url: str
     source: str
     source_type: str
+    source_category: str = "noise"
+    editorial_category: str = "noise"
     published_at: Optional[str] = None
     fetched_at: str
     summary: str = ""
@@ -199,6 +201,8 @@ class NewsCollectionResult(BaseModel):
     fresh_count: int = 0
     sources: List[str] = Field(default_factory=list)
     source_counts: dict[str, int] = Field(default_factory=dict)
+    source_category_counts: dict[str, int] = Field(default_factory=dict)
+    editorial_category_counts: dict[str, int] = Field(default_factory=dict)
     availability_counts: dict[str, int] = Field(default_factory=dict)
     items: List[NewsItem] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
@@ -211,12 +215,17 @@ class NewsScore(BaseModel):
     url: str
     source: str
     source_type: str
+    source_category: str = "noise"
+    editorial_category: str = "noise"
     category: str
     importance_score: float = 0.0
+    policy_value_score: float = 0.0
+    trend_value_score: float = 0.0
+    industry_impact_score: float = 0.0
+    public_interest_score: float = 0.0
+    source_reliability_score: float = 0.0
     freshness_score: float = 0.0
-    source_score: float = 0.0
-    relevance_score: float = 0.0
-    discussion_score: float = 0.0
+    ai_relevance_score: float = 0.0
     writing_value_score: float = 0.0
     total_score: float = 0.0
     recommended: bool = False
@@ -230,6 +239,7 @@ class NewsScoringResult(BaseModel):
     generated_at: str
     total_count: int = 0
     recommended_count: int = 0
+    source_category_counts: dict[str, int] = Field(default_factory=dict)
     category_counts: dict[str, int] = Field(default_factory=dict)
     section_counts: dict[str, int] = Field(default_factory=dict)
     scores: List[NewsScore] = Field(default_factory=list)
@@ -326,6 +336,25 @@ class NewsDigestArticle(BaseModel):
     publish_ready: bool = False
     polished: bool = False
     package_path: Optional[str] = None
+
+
+class NewsDigestPipelineResult(BaseModel):
+    exists: bool = True
+    generated_at: str
+    date: str
+    status: str
+    stages: List[dict] = Field(default_factory=list)
+    collection_count: int = 0
+    scored_count: int = 0
+    event_count: int = 0
+    digest_event_count: int = 0
+    digest_title: str = ""
+    digest_path: Optional[str] = None
+    package_path: Optional[str] = None
+    quality_score: Optional[float] = None
+    publish_ready: bool = False
+    content_id: Optional[str] = None
+    warnings: List[str] = Field(default_factory=list)
 
 
 class AuthorProfile(BaseModel):

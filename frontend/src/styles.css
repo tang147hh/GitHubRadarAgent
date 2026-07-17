@@ -263,7 +263,7 @@ a:hover {
 .ai-news-view-selection > .news-overview-panel, .ai-news-view-selection > .news-filter-panel, .ai-news-view-selection > .news-tabs, .ai-news-view-selection > .news-list-panel,
 .ai-news-view-plan > .news-tabs, .ai-news-view-plan > .news-plan-panel,
 .ai-news-view-articles > .news-article-control-panel, .ai-news-view-articles > .news-tabs, .ai-news-view-articles > .news-articles-panel,
-.ai-news-view-digest > .news-digest-control-panel, .ai-news-view-digest > .news-tabs, .ai-news-view-digest > .news-digest-panel,
+.ai-news-view-digest > .news-digest-control-panel, .ai-news-view-digest > .news-digest-panel,
 .ai-news-view-reports > .news-tabs, .ai-news-view-reports > .news-report-panel { display: block; }
 
 .nav-item,
@@ -1490,6 +1490,10 @@ a:hover {
   gap: 8px;
 }
 
+.ai-news-view-digest > .news-tabs {
+  display: none;
+}
+
 .news-tabs button {
   min-height: 36px;
   border: 1px solid #dbe3ef;
@@ -1911,6 +1915,52 @@ a:hover {
 
 .news-digest-meta {
   margin-bottom: 12px;
+}
+
+.digest-pipeline-stages {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.digest-pipeline-stage {
+  min-width: 0;
+  border: 1px solid #dbe3ef;
+  border-left: 3px solid #94a3b8;
+  border-radius: 6px;
+  background: #fff;
+  padding: 10px;
+}
+
+.digest-pipeline-stage.is-completed { border-left-color: #16835f; }
+.digest-pipeline-stage.is-running { border-left-color: #2563eb; }
+.digest-pipeline-stage.is-failed { border-left-color: #c2413b; }
+
+.digest-pipeline-stage > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.digest-pipeline-stage strong,
+.digest-pipeline-stage span,
+.digest-pipeline-stage p {
+  overflow-wrap: anywhere;
+}
+
+.digest-pipeline-stage span {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.digest-pipeline-stage p {
+  margin: 6px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .compact-header {
@@ -3488,4 +3538,9 @@ a:hover {
   .publishing-metrics { grid-template-columns: minmax(0, 1fr); }
   .publishing-metrics > div { border-left: 0 !important; }
   .publishing-metrics > div + div { border-top: 1px solid #e5eaf2; }
+}
+.source-category-badge {
+  background: #eef6f1;
+  border-color: #b8d4c3;
+  color: #245c3e;
 }

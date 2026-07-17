@@ -23,6 +23,7 @@ export function AINewsArticlesPage({ t, language, onOpenLibrary }: ContentPagePr
   return <div className="page-stack"><ContentWorkspaceList language={language} title={t.nav.aiNewsArticles} types={["ai_news_article"]} mode="news" onOpenLibrary={onOpenLibrary} /><AINewsPage t={t} view="articles" /></div>;
 }
 export function AINewsDigestPage({ t, language, onOpenLibrary }: ContentPageProps) {
-  return <div className="page-stack"><ContentWorkspaceList language={language} title={t.nav.aiNewsDigest} types={["ai_news_digest"]} mode="digest" onOpenLibrary={onOpenLibrary} /><AINewsPage t={t} view="digest" /></div>;
+  void language;
+  return <AINewsPage t={t} view="digest" onOpenLibrary={onOpenLibrary} />;
 }
 export function AINewsReportsPage({ t }: { t: Translation }) { return <AINewsPage t={t} view="reports" />; }

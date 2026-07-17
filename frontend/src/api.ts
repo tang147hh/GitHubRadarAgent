@@ -17,13 +17,17 @@ import type {
   NewsArticleWriteRequest,
   NewsCollectRequest,
   NewsCollectionResult,
+  NewsItem,
   NewsDetailResult,
   NewsDigestArticle,
   NewsDigestReviewRequest,
+  NewsDigestPipelineRequest,
+  NewsDigestPipelineResult,
   NewsDigestWriteRequest,
   NewsEventBuildRequest,
   NewsEventResult,
   NewsScoreRequest,
+  NewsScore,
   NewsScoringResult,
   NewsReportContent,
   NewsSelectionContext,
@@ -153,9 +157,41 @@ export const approveAgentRun = (runId: string, request: AgentRunApprovalRequest)
   postJson<AgentRun>(`/api/agent/runs/${encodeURIComponent(runId)}/approve`, request);
 export const resumeAgentRun = (runId: string) =>
   postJson<AgentRun>(`/api/agent/runs/${encodeURIComponent(runId)}/resume`, {});
-export const fetchLatestNews = () => getJson<NewsCollectionResult>("/api/news/latest");
+const normalizeNewsItem = (item: NewsItem): NewsItem => ({
+  ...item,
+  source_category: item.source_category || "noise",
+  editorial_category: item.editorial_category || item.source_category || "noise",
+});
+
+const normalizeNewsCollection = (payload: NewsCollectionResult): NewsCollectionResult => ({
+  ...payload,
+  source_category_counts: payload.source_category_counts || {},
+  editorial_category_counts: payload.editorial_category_counts || {},
+  items: (payload.items || []).map(normalizeNewsItem),
+});
+
+const normalizeNewsScore = (score: NewsScore): NewsScore => ({
+  ...score,
+  source_category: score.source_category || "noise",
+  editorial_category: score.editorial_category || score.source_category || "noise",
+  policy_value_score: Number(score.policy_value_score || 0),
+  trend_value_score: Number(score.trend_value_score || 0),
+  industry_impact_score: Number(score.industry_impact_score || 0),
+  public_interest_score: Number(score.public_interest_score || 0),
+  source_reliability_score: Number(score.source_reliability_score || 0),
+  ai_relevance_score: Number(score.ai_relevance_score || 0),
+});
+
+const normalizeNewsScoring = (payload: NewsScoringResult): NewsScoringResult => ({
+  ...payload,
+  source_category_counts: payload.source_category_counts || {},
+  scores: (payload.scores || []).map(normalizeNewsScore),
+});
+
+export const fetchLatestNews = () => getJson<NewsCollectionResult>("/api/news/latest").then(normalizeNewsCollection);
 export const fetchNewsReport = () => getJson<NewsReportContent>("/api/news/report");
-export const collectNews = (request: NewsCollectRequest) => postJson<NewsCollectionResult>("/api/news/collect", request);
+export const collectNews = (request: NewsCollectRequest) =>
+  postJson<NewsCollectionResult>("/api/news/collect", request).then(normalizeNewsCollection);
 export const fetchNewsDetail = (newsId: string) => getJson<NewsDetailResult>(`/api/news/items/${encodeURIComponent(newsId)}`);
 export const refreshNewsDetail = (newsId: string) =>
   postJson<NewsDetailResult>(`/api/news/items/${encodeURIComponent(newsId)}/refresh`, {});
@@ -197,8 +233,9 @@ export const fetchNewsArticlePublish = (articleId: string) =>
   getJson<NewsReportContent>(`/api/news/article/${encodeURIComponent(articleId)}/publish`);
 export const fetchNewsArticlePackage = (articleId: string) =>
   getJson<NewsReportContent>(`/api/news/article/${encodeURIComponent(articleId)}/package`);
-export const fetchNewsScores = () => getJson<NewsScoringResult>("/api/news/scores");
-export const scoreNews = (request: NewsScoreRequest) => postJson<NewsScoringResult>("/api/news/score", request);
+export const fetchNewsScores = () => getJson<NewsScoringResult>("/api/news/scores").then(normalizeNewsScoring);
+export const scoreNews = (request: NewsScoreRequest) =>
+  postJson<NewsScoringResult>("/api/news/score", request).then(normalizeNewsScoring);
 export const fetchNewsScoresReport = () => getJson<NewsReportContent>("/api/news/scores/report");
 export const fetchNewsEvents = () => getJson<NewsEventResult>("/api/news/events");
 export const fetchNewsEventsReport = () => getJson<NewsReportContent>("/api/news/events/report");
@@ -212,6 +249,10 @@ export const reviewNewsDigest = (request: NewsDigestReviewRequest) =>
   postJson<NewsDigestArticle>("/api/news/digest/review", request);
 export const fetchNewsDigestReview = () => getJson<NewsDigestArticle>("/api/news/digest/review");
 export const fetchNewsDigestPackage = () => getJson<NewsReportContent>("/api/news/digest/package");
+export const runNewsDigestPipeline = (request: NewsDigestPipelineRequest) =>
+  postJson<NewsDigestPipelineResult>("/api/news/digest/run", request);
+export const fetchNewsDigestPipelineLatest = () =>
+  getJson<NewsDigestPipelineResult>("/api/news/digest/pipeline/latest");
 export const fetchSnapshot = <T = unknown>(name: SnapshotName) =>
   getJson<T>(`/api/snapshots/${encodeURIComponent(name)}`);
 export const fetchFinalArticles = () => getJson<{ articles?: FinalArticleItem[] }>("/api/articles/final");
